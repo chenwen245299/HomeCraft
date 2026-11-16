@@ -1,0 +1,5 @@
+{
+  "version": "v1.5.1",
+  "archive_sha256": "cb952e8c1621c95ef5f1d17831c945e3d0ec5973f89c557a7ec8feb9c4f7d4c9",
+  "source": "https://github.com/arduino/arduino-cli/releases/download/v1.5.1/arduino-cli_1.5.1_macOS_ARM64.tar.gz"
+}

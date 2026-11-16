@@ -1,0 +1,24 @@
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.wav binary
+*.mp3 binary
+*.bin binary
+*.dmg binary
+*.zip binary
+*.gz binary
+
+# 固件编译直接使用的生成源码需要入库，默认折叠其大段点阵差异。
+3Inch7EPaper/main/fonts.c linguist-generated=true -diff
+3Inch7EPaper/main/music_fonts.c linguist-generated=true -diff
+3Inch7EPaper/main/brand_assets.c linguist-generated=true -diff
+3Inch7EPaper/main/lunar_calendar.c linguist-generated=true
+reTerminalE1002/main/fonts.c linguist-generated=true -diff
+reTerminalE1002/main/logos.c linguist-generated=true -diff
+reTerminalE1002/main/privacy.c linguist-generated=true -diff
+reTerminalE1002/main/lunar.c linguist-generated=true

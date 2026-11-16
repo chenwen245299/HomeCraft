@@ -1,0 +1,6 @@
+{
+  "core": "esp32:esp32@3.3.7",
+  "fqbn": "esp32:esp32:esp32s3:FlashMode=qio,FlashSize=32M,PartitionScheme=app5M_little24M_32MB,PSRAM=opi,CDCOnBoot=default,USBMode=hwcdc",
+  "partition_status": "compile-only placeholder; determine deployment layout after feature planning and original flash backup",
+  "upload_port": null
+}

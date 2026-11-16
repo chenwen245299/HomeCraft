@@ -1,0 +1,197 @@
+{
+  "name": "HomeCraft Device Control",
+  "version": 1,
+  "max_plaintext_bytes": 480,
+  "role": "HomeCraft is the protocol hub; hardware advertises capabilities and implements its own adapter.",
+  "current_transport": {
+    "type": "BLE Protocomm",
+    "security": "Security 2 patch1",
+    "account_credentials_on_hardware": false
+  },
+  "operations": [
+    "status",
+    "history",
+    "harness",
+    "page",
+    "rotate",
+    "refresh",
+    "sample",
+    "weather",
+    "todo",
+    "poem",
+    "totals",
+    "places"
+  ],
+  "pages": [
+    {
+      "id": 0,
+      "key": "overview",
+      "label": "用量总览"
+    },
+    {
+      "id": 1,
+      "key": "codex",
+      "label": "Codex"
+    },
+    {
+      "id": 2,
+      "key": "claude",
+      "label": "Claude Code"
+    },
+    {
+      "id": 3,
+      "key": "deepseek",
+      "label": "DeepSeek"
+    },
+    {
+      "id": 4,
+      "key": "environment",
+      "label": "温湿度趋势"
+    },
+    {
+      "id": 5,
+      "key": "network",
+      "label": "连接状态"
+    },
+    {
+      "id": 6,
+      "key": "help",
+      "label": "按键帮助"
+    },
+    {
+      "id": 7,
+      "key": "argus",
+      "label": "Argus"
+    },
+    {
+      "id": 8,
+      "key": "extra1",
+      "label": "DeepSeek Harness"
+    },
+    {
+      "id": 9,
+      "key": "extra2",
+      "label": "服务 6"
+    },
+    {
+      "id": 10,
+      "key": "extra3",
+      "label": "服务 7"
+    },
+    {
+      "id": 11,
+      "key": "extra4",
+      "label": "服务 8"
+    },
+    {
+      "id": 12,
+      "key": "music",
+      "label": "音乐"
+    },
+    {
+      "id": 13,
+      "key": "usage",
+      "label": "用量明细"
+    }
+  ],
+  "compatibility": "Existing page IDs0..12 preserved; usage13 and weather require advertised capabilities. Missing capabilities are never fabricated.",
+  "optional_controls": {
+    "rotation_control": "0 when the display has no rotate operation; absent on legacy firmware, which supports it with device_control:1",
+    "environment_history": "0 when the display keeps no temperature/humidity history; absent on legacy firmware, which supports it",
+    "rule": "HomeCraft hides or disables a declined control and never polls or reports it as pending"
+  },
+  "extensions": {
+    "weather": {
+      "capability": "weather:1 (one city) or weather:2 (two cities); forecast:1 adds tomorrow",
+      "request": {
+        "v": 1,
+        "op": "weather",
+        "city": "UTF-8 <=48 bytes",
+        "values": [
+          "fetched_at",
+          "temperature_tenths",
+          "low_tenths",
+          "high_tenths",
+          "WMO_code"
+        ],
+        "slot": "optional 0 or 1; omitted means 0; slot 1 only for weather:2 displays",
+        "tomorrow": "optional [WMO_code, low_tenths, high_tenths]; only for displays advertising forecast:1"
+      },
+      "clear_request": {
+        "v": 1,
+        "op": "weather",
+        "enabled": false,
+        "slot": "optional; omitted clears every slot"
+      },
+      "expiry": "HomeCraft sends a summary at most 6h old and sends clear_request when weather is off, a city is removed or a summary expired; cities are user-chosen (at most two, default Singapore), never IP or coordinates.",
+      "account_credentials": false
+    },
+    "todo": {
+      "capability": "todo:1",
+      "request": {
+        "v": 1,
+        "op": "todo",
+        "q": "0 重要紧急 | 1 重要不紧急 | 2 紧急不重要 | 3 不紧急不重要",
+        "items": [
+          "UTF-8 <=48 bytes each, at most 5 open items"
+        ],
+        "n": "optional: open items in this quadrant (>= items sent, <= 999)"
+      },
+      "rule": "One message per quadrant; an empty items array clears it. HomeCraft owns the list; done items are never sent.",
+      "account_credentials": false
+    },
+    "poem": {
+      "capability": "poem:1",
+      "request": {
+        "v": 1,
+        "op": "poem",
+        "title": "UTF-8 <=36 bytes",
+        "author": "UTF-8 <=24 bytes, e.g. 唐 · 王之涣",
+        "lines": [
+          "UTF-8 <=60 bytes each: two verses such as 白日依山尽，黄河入海流。",
+          "at most 4 entries"
+        ]
+      },
+      "clear_request": {
+        "v": 1,
+        "op": "poem",
+        "enabled": false
+      },
+      "rule": "HomeCraft chooses one bundled public-domain poem per UTC+8 day (or the user's next pick) and sends it once per connection and on change.",
+      "account_credentials": false
+    },
+    "totals": {
+      "capability": "totals:1",
+      "request": {
+        "v": 1,
+        "op": "totals",
+        "d": "[YYYYMMDD in UTC+8, tokens or -1]",
+        "wt": "[Monday of that day, tokens or -1]",
+        "mt": "[first day of that month, tokens or -1]"
+      },
+      "rule": "The today/week/month totals exactly as HomeCraft's home page shows them (every verified Codex account, effective Harness, OK readings only); -1 is unknown, never 0. Sent once per connection and on change. A display shows these for matching periods instead of adding its per-provider packets, which carry one Codex account.",
+      "account_credentials": false
+    },
+    "places": {
+      "capability": "places:1",
+      "request": {
+        "v": 1,
+        "op": "places",
+        "rows": [
+          "at most 2, in the order of HomeCraft's Climate page",
+          {"name": "UTF-8 <=48 bytes, the place name the user gave the display (else its default name)", "here": "true for the receiving display itself: it shows its own sensor"},
+          {"name": "UTF-8 <=48 bytes", "t": "temperature tenths -400..1250", "h": "humidity tenths 0..1000", "at": "sample time; t/h/at together or all absent (no reading yet)"}
+        ]
+      },
+      "rule": "Places the user named on the Climate page, else every display HomeCraft knows. Readings are HomeCraft's latest from each display, never estimated; a place without one is sent by name only and shown as unknown. Sent once per connection and on change; an empty rows array returns the display to its own indoor reading.",
+      "account_credentials": false
+    },
+    "battery": {
+      "status_fields": {
+        "device.power": "[usb, battery_present, charging, percent]; percent -1 when not calibrated; usb/charging 0 when the display cannot read its charger",
+        "device.mv": "optional battery millivolts measured by the display"
+      },
+      "rule": "A display may show coarse voltage-based bars; HomeCraft never presents millivolts as a calibrated percentage."
+    }
+  }
+}

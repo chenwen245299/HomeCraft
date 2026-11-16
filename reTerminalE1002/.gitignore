@@ -1,0 +1,15 @@
+/.arduino/
+/toolchains/
+/build/
+/sdkconfig
+/sdkconfig.old
+# 参考源码、PDF、提取文本和发行索引按来源锁重新获取。
+/reference/*
+!/reference/sources.lock.json
+!/reference/README.md
+/config/arduino-cli.yaml
+/.local/
+/backups/
+/.cache/
+__pycache__/
+

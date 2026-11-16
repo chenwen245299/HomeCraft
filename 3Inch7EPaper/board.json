@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "3Inch7EPaper",
+  "board": "Waveshare ESP32-S3-ePaper-3.97",
+  "chip": "esp32s3",
+  "local_data": ".local",
+  "sdkconfig": "sdkconfig",
+  "sdkconfig_defaults": "sdkconfig.defaults",
+  "partition_table": "partitions.csv",
+  "protocol": {
+    "hub": "HomeCraft",
+    "profile": "device-v1",
+    "definition": "../software/protocol/device-v1.json",
+    "generated_header": "main/homecraft_wire.h",
+    "transport": "BLE Protocomm Security2"
+  }
+}

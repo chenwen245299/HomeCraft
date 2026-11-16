@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Original HomeCraft artwork. Craft family: flat colour, cream, bold ink, offset shadow. -->
+  <defs>
+    <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="186"/></clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="#586EAC"/>
+  <g clip-path="url(#tile)" stroke-linejoin="round" stroke-linecap="round">
+    <g transform="rotate(-6 474 492)">
+      <path d="M258 429V786H686V429L472 246Z" transform="translate(16 20)" fill="#000" opacity=".22"/>
+      <path d="M258 429V786H686V429L472 246Z" fill="#F4EFDE" stroke="#151515" stroke-width="18"/>
+      <path d="M587 324V252H647V376" fill="#F4EFDE" stroke="#151515" stroke-width="18"/>
+      <path d="M220 448L472 230L724 448L691 484L472 294L253 484Z" fill="#E9A92C" stroke="#151515" stroke-width="18"/>
+      <path d="M271 493V532L472 359L673 532V493L472 319Z" fill="#E1D7BB"/>
+      <rect x="316" y="467" width="200" height="157" rx="21" fill="#D8E9E4" stroke="#151515" stroke-width="16"/>
+      <path d="M416 476V615M325 545H507" fill="none" stroke="#151515" stroke-width="14"/>
+      <path d="M340 713H520" fill="none" stroke="#151515" stroke-width="18"/>
+      <path d="M340 753H472" fill="none" stroke="#151515" stroke-width="18"/>
+    </g>
+    <!-- A small e-paper terminal carries the connected-home identity. -->
+    <rect x="564" y="592" width="270" height="244" rx="46" transform="translate(12 16)" fill="#000" opacity=".22"/>
+    <rect x="564" y="592" width="270" height="244" rx="46" fill="#E9A92C" stroke="#151515" stroke-width="18"/>
+    <rect x="585" y="612" width="228" height="194" rx="29" fill="#F4EFDE" stroke="#151515" stroke-width="10"/>
+    <path d="M618 730H645L665 678L692 755L716 708H780" fill="none" stroke="#151515" stroke-width="18"/>
+    <circle cx="619" cy="648" r="10" fill="#257C79"/>
+    <path d="M650 648H715" fill="none" stroke="#257C79" stroke-width="15"/>
+  </g>
+</svg>

@@ -1,0 +1,74 @@
+{
+  "verification": "schematic v1.2 + official examples/chip docs; not tested on physical unit",
+  "gpio_numbers_not_connector_positions": true,
+  "pins": {
+    "epaper_spi": {
+      "sck": 7,
+      "mosi": 9,
+      "cs": 10,
+      "dc": 11,
+      "reset": 12,
+      "busy": 13
+    },
+    "sd_spi": {
+      "sck": 7,
+      "miso": 8,
+      "mosi": 9,
+      "cs": 14,
+      "detect": 15,
+      "enable": 16
+    },
+    "sensor_rtc_i2c": {
+      "sda": 19,
+      "scl": 20,
+      "sht40_address": "0x44",
+      "pcf8563_address": "0x51"
+    },
+    "charger_i2c_v1_2": {
+      "sda": 39,
+      "scl": 40,
+      "address": null
+    },
+    "console_uart0": {
+      "tx": 43,
+      "rx": 44,
+      "baud": 115200,
+      "usb_bridge": "CH340C"
+    },
+    "buttons_active_low": {
+      "key0": 3,
+      "key1": 4,
+      "key2": 5
+    },
+    "led_active_low": 6,
+    "buzzer": 45,
+    "battery": {
+      "adc_gpio": 1,
+      "adc_unit": 1,
+      "adc_channel": 0,
+      "divider_factor": 2,
+      "enable": 21
+    },
+    "pdm_microphone": {
+      "enable": 38,
+      "clock": 42,
+      "data": 41
+    },
+    "j2_top_to_bottom": [
+      "3V3",
+      "GND",
+      46,
+      2,
+      17,
+      18,
+      20,
+      19
+    ],
+    "reserved_unpopulated_touch": {
+      "sda": 39,
+      "scl": 40,
+      "interrupt": 47,
+      "reset": 48
+    }
+  }
+}

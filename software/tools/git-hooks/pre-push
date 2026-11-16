@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+export PATH
+# Consume Git's ref list without exposing remote URLs or commit contents.
+# Allow deletion-only pushes so removing a leaked remote ref remains possible.
+upload=false
+while read -r local_ref local_oid remote_ref remote_oid; do
+    case "$local_oid" in
+        *[!0]*) upload=true ;;
+    esac
+done
+if [ "$upload" = false ]; then
+    exit 0
+fi
+root=$(git rev-parse --show-toplevel)
+exec python3 "$root/software/tools/check_secrets.py"

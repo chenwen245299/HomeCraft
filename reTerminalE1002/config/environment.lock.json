@@ -1,0 +1,50 @@
+{
+  "date": "2026-10-26",
+  "host": "macOS arm64",
+  "esp_idf": {
+    "version": "6.1",
+    "python": "3.12.15",
+    "activation_script": "/Users/qichengwen/.espressif/tools/activate_idf_v6.1.sh",
+    "shared_installation": true,
+    "board_configuration": "sdkconfig.defaults"
+  },
+  "arduino_cli": {
+    "version": "v1.5.1",
+    "archive_sha256": "cb952e8c1621c95ef5f1d17831c945e3d0ec5973f89c557a7ec8feb9c4f7d4c9",
+    "source": "https://github.com/arduino/arduino-cli/releases/download/v1.5.1/arduino-cli_1.5.1_macOS_ARM64.tar.gz"
+  },
+  "arduino_core": "esp32:esp32@3.3.7",
+  "arduino_libraries": [
+    {
+      "name": "Adafruit GFX Library",
+      "version": "1.13.0"
+    },
+    {
+      "name": "Sensirion Core",
+      "version": "0.7.3"
+    },
+    {
+      "name": "Adafruit BusIO",
+      "version": "1.17.4"
+    },
+    {
+      "name": "Sensirion I2C SHT4x",
+      "version": "1.1.2"
+    }
+  ],
+  "seeed_gxepd2": {
+    "version": "1.6.9",
+    "commit": "1100ea37c16b910fd79152f4250c13d802b9c20b"
+  },
+  "ctags": {
+    "version": "5.8-arduino11",
+    "source_commit": "abc8fca7499f44c725122881cd380a88c37abe0e",
+    "patch": "config/patches/arduino-ctags-macos.patch",
+    "patch_sha256": "ce01892c7507b60b43f4c57b101b34835d5edf37af1f814cf702397bd68804a2",
+    "binary_sha256": "424b254a3ab1a2b3eb1d2d53a7bf6a267f07290313820febaefbf77e7b4e4494",
+    "original_x86_binary_sha256": "7e19156c9d596282a4adb7f4a3816e93dc1c37ca04c891e4340b0610ad85222b",
+    "architecture": "arm64",
+    "scope": "only this board Arduino data directory",
+    "reported_version": "Exuberant Ctags Development, Copyright (C) 1996-2009 Darren Hiebert"
+  }
+}

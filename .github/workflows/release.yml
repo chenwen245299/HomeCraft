@@ -1,0 +1,150 @@
+name: Release
+run-name: Release ${{ inputs.tag || github.ref_name }}
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已有的版本标签，例如 v0.3.1'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Validate release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      repository: ${{ steps.config.outputs.repository }}
+      cross_repository: ${{ steps.config.outputs.cross_repository }}
+    steps:
+      - id: tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo '::error::标签必须是 vMAJOR.MINOR.PATCH[-PRERELEASE]'
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          persist-credentials: false
+      - name: Validate source upload boundaries and versions
+        id: config
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 software/tools/check_git_contents.py
+          python3 software/tools/release.py check
+          python3 - <<'PY'
+          import importlib.util, os
+          spec = importlib.util.spec_from_file_location('release', 'software/tools/release.py')
+          module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+          meta = module.metadata()
+          module.check_tag(meta, os.environ['TAG'])
+          assert meta['source_repository'] == os.environ['REPOSITORY'], 'source repository mismatch'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('repository=' + meta['repository'] + '\n')
+              output.write('cross_repository=' + str(meta['source_repository'] != meta['repository']).lower() + '\n')
+          PY
+
+  secrets:
+    name: Check release secrets
+    needs: version
+    uses: ./.github/workflows/secret-scan.yml
+    with:
+      ref: ${{ needs.version.outputs.tag }}
+
+  macos:
+    name: Build Apple silicon Mac
+    needs: [version, secrets]
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt, clippy
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked --manifest-path software/mac-app/Cargo.toml
+      - name: Offline checks (no accounts or devices)
+        run: |
+          cargo fmt --manifest-path software/mac-app/Cargo.toml --check
+          cargo fmt --manifest-path software/mac-app/native/Cargo.toml --check
+          cargo test --locked --offline --manifest-path software/mac-app/Cargo.toml
+          cargo clippy --locked --offline --all-targets --manifest-path software/mac-app/Cargo.toml -- -D warnings
+          python3 -m unittest discover -s software/tests -p 'test_release*.py' -v
+          python3 -m unittest discover -s software/tests -p test_git_contents.py -v
+          python3 software/tools/generate_device_protocol.py --check
+      - name: Build allowlisted App, ZIP, DMG and update manifest
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          REPOSITORY: ${{ needs.version.outputs.repository }}
+        run: |
+          zsh software/tools/build_mac_app.sh
+          zsh software/tools/package_mac_release.sh "$TAG" "$REPOSITORY"
+          if [[ "$TAG" != *-* ]]; then
+            stem="$(python3 software/tools/release.py value stem)"
+            software/dist/HomeCraft.app/Contents/MacOS/HomeCraft --verify-update-files \
+              software/dist/releases/latest.json "software/dist/releases/$stem.zip"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-release
+          path: |
+            software/dist/releases/*.dmg
+            software/dist/releases/*.zip
+            software/dist/releases/latest.json
+            software/dist/releases/SHA256SUMS.txt
+            software/dist/releases/body.md
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish complete release
+    needs: [version, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-release
+          path: software/dist/releases
+      - name: Upload assets in draft, then publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          CROSS_REPOSITORY: ${{ needs.version.outputs.cross_repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          REPOSITORY: ${{ needs.version.outputs.repository }}
+        run: |
+          if [[ "$CROSS_REPOSITORY" == true && -z "$RELEASE_TOKEN" ]]; then
+            echo '::error::独立发布库需要在源码仓库的 Actions secrets 配置 RELEASE_TOKEN，仅授予发布库 Contents 读写权限。'
+            exit 1
+          fi
+          python3 software/tools/release.py publish --tag "$TAG" --repository "$REPOSITORY" --out software/dist/releases

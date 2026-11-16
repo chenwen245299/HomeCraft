@@ -1,0 +1,17 @@
+[package]
+name = "epaper-macos"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+block2 = "0.5.1"
+objc2-app-kit = { version = "0.2.2", features = ["NSApplication", "NSRunningApplication", "NSWindow", "NSView", "NSVisualEffectView", "NSColor", "NSButton", "NSControl", "NSResponder", "NSOpenPanel", "NSSavePanel", "NSPanel", "NSAppearance"] }
+objc2-foundation = { version = "0.2.2", features = ["NSGeometry", "NSThread", "NSString", "NSArray", "NSURL", "NSFileCoordinator", "NSFileManager", "NSError", "NSAppleEventManager", "NSAppleEventDescriptor", "block2"] }
+
+[lints.rust]
+unsafe_code = "deny"

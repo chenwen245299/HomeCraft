@@ -1,0 +1,44 @@
+{
+  "retrieved_date": "2026-10-26",
+  "repositories": [
+    {
+      "repository": "https://github.com/Seeed-Projects/Seeed_GxEPD2",
+      "commit": "1100ea37c16b910fd79152f4250c13d802b9c20b",
+      "path": "reference/Seeed_GxEPD2"
+    },
+    {
+      "repository": "https://github.com/Seeed-Projects/OSHW-reTerminal-Series-E-D",
+      "commit": "8d97d8912987c07529287629f7e73039bb0e6384",
+      "path": "reference/OSHW-reTerminal-Series-E-D"
+    },
+    {
+      "repository": "https://github.com/arduino/ctags",
+      "commit": "abc8fca7499f44c725122881cd380a88c37abe0e",
+      "tag": "5.8-arduino11",
+      "path": "reference/arduino-ctags",
+      "local_patch": "config/patches/arduino-ctags-macos.patch"
+    }
+  ],
+  "schematic": {
+    "source": "https://files.seeedstudio.com/wiki/reterminal_e10xx/res/202004321_reTerminal_E1002_V1_2_SCH_251120.pdf",
+    "file": "reference/reTerminal_E1002_V1_2_SCH_251120.pdf",
+    "sha256": "136fe88e7a0aafba231013d73788529cf3c90c62a7632b04425096d7c6069ba3",
+    "revision": "v1.2",
+    "date": "2025-11-20",
+    "pages": 9,
+    "license": "CC BY-SA4.0",
+    "physical_unit_revision_verified": false
+  },
+  "chip_datasheet": {
+    "source": "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32S3/res/esp32-s3_datasheet.pdf",
+    "file": "reference/esp32-s3_datasheet-seeed.pdf",
+    "sha256": "8f3a10205e31799d11ae6629c7383cce896d59f3a009048b53fcfa1ca90708b9"
+  },
+  "tutorials": [
+    "https://wiki.seeedstudio.com/cn/getting_started_with_reterminal_e1002/",
+    "https://wiki.seeedstudio.com/epaper_work_with_arduino/",
+    "https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino/",
+    "https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals/",
+    "https://wiki.seeedstudio.com/reterminal_e10xx_with_arduino_peripherals_2/"
+  ]
+}

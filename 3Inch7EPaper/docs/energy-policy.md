@@ -1,0 +1,53 @@
+# 0.2.19 省电与数据节奏
+
+用户于2026-10-21明确确认：Mac每30秒读取并下发用量；板子每30秒采温湿度，每5分钟向Mac回传温湿度/历史，手动点击立即采样与回传。此要求覆盖以前5秒采样/回传、100ms IMU及20次/30分钟定期全刷记录。
+
+| 路径 | 当前节奏 |
+| --- | --- |
+| SHTC3温湿度及PMU电量百分比 | 每30秒，手动采样立即执行；SHTC3测量后仍休眠；USB插拔确认后额外读取一次真实电量 |
+| PMU供电状态（0.2.35起） | 每100ms只读供电/电池/充电标志，稳定100ms后确认插拔并快速局刷顶部；不连续快速轮询电量计 |
+| SD原始环境记录 | 每分钟一行，仍按自然日存CSV；不因30秒采样变为每30秒写卡 |
+| 重力方向读取 | 每1秒，按实际时间调整滤波，稳定等待仍保留；不启用GPIO39/40中断 |
+| BOOT/PWR | 原10ms扫描、原单/双/三击和长按映射 |
+| Mac用量读取及下发 | 默认30秒，可在App刷新设置修改；只读官方数据源，不调用模型 |
+| Mac自动温湿度/状态/曲线/多Mac缓存读取 | 5分钟，连接后首次立即读取；手动采样或控屏按事务完成及时回读 |
+| BLE控制回复与保活 | 回复仍立即；空闲保活30秒，不把小ACK当作周期遥测 |
+| 显示 | 普通数据、时钟、主页卡片排序或设备行数变化均双RAM差分；没有像素变化不写屏 |
+| 整屏刷新 | 开机/换页/方向变化、手动清残影、控制器状态丢失及I/O故障恢复；取消20次和30分钟的定期全刷，连接页也不再每次全刷 |
+| Harness数字NVS缓存 | RAM立即更新，持久化合并到最多每5分钟一次；正常关机前强制提交 |
+
+用户要求的30秒是HomeCraft读取/同步节奏，不能承诺官方统计桶每30秒生成。Codex缓存改30秒；DeepSeek API余额仍至少5分钟、429后15分钟退避，余额不冒充Token。旧App分钟设置可读取，新设置使用30–7200秒；本机实际配置及部署结果见3Inch7EPaper/artifacts/homecraft-0219-energy-validation.json。
+
+## CPU、睡眠和Wi-Fi
+
+采用ESP-IDF官方esp_pm_configure，CPU最大80MHz/空闲40MHz，启用Tickless Idle、BLE Modem-sleep和自动Light-sleep。由驱动的PM锁保护SPI/I²C/SD事务，不手动在BLE会话中调用普通light_sleep_start，也不使用会断开连接的深睡。主循环改100ms、网络任务1秒；按键仍10ms轮询，所以并不是一次连续睡30秒。
+
+蓝牙低功耗时钟使用已知存在的主晶振，并保持其在轻睡眠供电；不假设板子有独立32k晶振，也不选不满足连接精度的内部RC。主晶振常开会限制最低电流，不能拿纯芯片极限休眠电流估算整板续航。USB连接电脑时启用官方USJ_NO_AUTO_LS_ON_CONNECTION保护调试连接；电池供电/未连接USB主机时自动睡眠才可生效。CPU仍可降频。
+
+数据模式保留Wi-Fi初始化和RAM配置，停止Wi-Fi射频。官方配网manager会为扫描临时启动STA，因此打开数据端点后明确esp_wifi_stop；手机配网或网页AP仅按用户操作开启，结束后回到BLE并停止Wi-Fi。取消关机的恢复路径也不再无条件启动Wi-Fi。保持Security 2和原绑定，不擦除NVS/SD，不改变充电参数。
+
+安全只读USB命令EPAPER_ENERGY返回配置的CPU最小/最大、自动睡眠开关、累计实际轻睡次数/时间、Wi-Fi运行事件状态及采样间隔。计数由官方非阻塞退出回调累计，不代表电流测量；无账户、配对码或密钥字段。
+
+## 官方依据
+
+- [ESP32-S3 Power Management](https://docs.espressif.com/projects/esp-idf/en/v6.1/esp32s3/api-reference/system/power_management.html)：DFS、自动轻睡、驱动PM锁与回调。
+- [Bluetooth LE低功耗时钟](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-guides/low-power-mode/low-power-mode-ble.html)：主晶振、外部32k及内部RC的精度与限制。
+- [USB Serial/JTAG与自动睡眠](https://docs.espressif.com/projects/esp-idf/en/v5.2/esp32s3/api-guides/usb-serial-jtag-console.html)：连接主机时的自动轻睡保护；本机IDF6.1 Kconfig及驱动已交叉核实。
+
+未测实际电流、充放电曲线或长时间不全刷后的残影程度。保留App“整屏清除残影”与音乐页外的BOOT双击恢复；不能把编译通过或USB连接期间的休眠配置当作电池睡眠实测。最终已测和待测项以验证JSON为准。
+
+
+## 0.2.24 继续减少内部功耗和重复计算（2026-10-24）
+
+用户已反馈相比旧版省电明显，并要求继续优化。保留40–80MHz DFS、蓝牙Modem-sleep/自动Light-sleep、USB主机轻睡保护、30秒温湿度/电源采样、1秒方向读取、10ms按键、30–60秒差分评估及SD每分钟原始记录。
+
+QMI8658的内部加速度设置由正常125Hz改为11Hz低功耗：先停CTRL7，CTRL2(0x03)=0x0E，量程仍±2g，关闭陀螺仪及滤波后CTRL7(0x08)=0x01；启用后读回两个寄存器，配置不符报错。只调整内部采样，不把宿主1秒方向检测再放慢；原稳定等待/平放保持和手动旋转保留，不使用冲突GPIO39/40。[微雪提供的QST手册](https://files.waveshare.com/wiki/common/QMI8658C_datasheet_rev_0.9.pdf)第30–31、45页定义该模式，只有关闭陀螺仪时可用。手册第22页的典型电流是芯片参考条件，不能直接当本板电流或续航结果。
+
+输入任务原先每10ms重复覆盖完全相同的遥测队列，现仅在新传感器采样、IMU有效性或方向变化时发布；BOOT/PWR扫描仍每10ms，手动采样仍立即通知并发布结果。SD任务原先每秒遍历1440个分钟槽重建曲线，现只在分钟记录、日期、挂载/写入状态等实质变化时重建；正常关机仍强制发布和安全提交。任务等待节奏和每分钟fsync不改，未减少日志可靠性。
+
+EPAPER_ENERGY增加独立EPAPER_WORK行：uptime_ms/telemetry/history表示实际发布及曲线重建次数；新增只读EPAPER_IMU_MODE输出CTRL2/CTRL7寄存器值。均不含凭据。它们用于确认重复工作减少，不是功率计；USB连接下自动轻睡次数可能为0，不能误报为低功耗失效或电池续航。实测数字与待测项见3Inch7EPaper/artifacts/argus-energy-0224-validation.json。
+
+
+## 0.2.36 SD 音乐
+
+音乐播放期间 CPU 上限暂时为160MHz，并持有CPU_MAX/NO_LIGHT_SLEEP锁以保护输出；暂停/停止后关闭PA和编解码器输出、恢复原音频供电位并释放锁，回到40–80MHz配置。音乐任务闲置等待通知，目录每60秒检查，时间每10秒更新；不改环境分钟日志、正常内容差分和USB供电快速局刷策略。实测状态与限制见[音乐说明](music.md)，未测播放电流/续航。

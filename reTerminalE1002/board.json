@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "id": "reTerminalE1002",
+  "board": "Seeed Studio reTerminal E1002",
+  "chip": "ESP32-S3R8",
+  "flash_mb_documented": 32,
+  "psram_mb_documented": 8,
+  "display": {
+    "inches": 7.3,
+    "width": 800,
+    "height": 480,
+    "technology": "E Ink Spectra6",
+    "colors": [
+      "black",
+      "white",
+      "red",
+      "green",
+      "blue",
+      "yellow"
+    ],
+    "panel": "GDEP073E01",
+    "controller_status": "Seeed example comments say ED2208; driver header says unknown; not independently established"
+  },
+  "reference_schematic_revision": "v1.2; actual PCB revision unknown",
+  "local_data": ".local",
+  "sdkconfig": "sdkconfig",
+  "sdkconfig_defaults": "sdkconfig.defaults",
+  "pin_configuration": [
+    "config/pins.h",
+    "config/pins.json"
+  ],
+  "development": {
+    "esp_idf": "6.1",
+    "arduino_cli": "1.5.1",
+    "arduino_esp32_core": "3.3.7",
+    "arduino_profile": "config/arduino-profile.json"
+  },
+  "protocol": {
+    "hub": "HomeCraft",
+    "profile": "device-v1",
+    "definition": "../software/protocol/device-v1.json",
+    "generated_header": "main/homecraft_wire.h",
+    "transport": "BLE Protocomm Security2/patch1",
+    "status": "0.3.0 flashed to app0 only; paired with HomeCraft 0.3.0; full refresh only; totals:1 and SY6974B charge status (read only); places:1 and horizontal weather/places strip in 19b90846; two-display check pending"
+  },
+  "phase": "HomeCraft color usage firmware 0.3.0 running on device (app0); factory backup saved; on-device validation in progress",
+  "flashed": "app0 only (2026-10-26), see artifacts/firmware-0.3.0-build.json",
+  "observed_hardware": {
+    "date": "2026-10-26",
+    "usb_vid_pid": "1a86:7523",
+    "chip": "ESP32-S3 (QFN56)",
+    "chip_revision": "v0.2",
+    "flash_mb": 32,
+    "psram_mb_efuse": 8,
+    "psram_runtime_verified": true,
+    "pcb_revision": null,
+    "evidence": "artifacts/usb-first-contact-20261026.json"
+  }
+}
