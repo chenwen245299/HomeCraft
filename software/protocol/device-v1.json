@@ -101,6 +101,12 @@
     "rule": "HomeCraft hides or disables a declined control and never polls or reports it as pending"
   },
   "extensions": {
+    "harness_aggregate": {
+      "capability": "harness_aggregate:1",
+      "packet": "Existing profile 4 / DeepSeek Harness packet, without o; d/wt/mt/u contain the hub's deduplicated usage, never one Mac's independent consumption.",
+      "rule": "Replace legacy per-Mac totals with this authoritative snapshot. Never add machine observations to it or export it through op:harness as a machine source. Unavailable aggregates are withdrawn as s:0 without numeric fields (the App retains the original error); missing periods remain unknown across calendar changes. Per-Mac-only displays do not receive Harness usage from new clients.",
+      "account_credentials": false
+    },
     "weather": {
       "capability": "weather:1 (one city) or weather:2 (two cities); forecast:1 adds tomorrow",
       "request": {

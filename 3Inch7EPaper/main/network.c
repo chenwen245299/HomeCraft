@@ -276,7 +276,7 @@ static esp_err_t data_handler(uint32_t session, const uint8_t *input, ssize_t le
         take();
         usage_record_t *current = &state.providers[provider];
         bool harness=provider==PROVIDER_EXTRA1 && !strcmp(record.name,"DeepSeek Harness");
-        if(harness && record.status==USAGE_OK) {
+        if(harness) {
             bool changed;
             if(!harness_stats_update(&state.harness,&record,&changed)){give();return ESP_ERR_INVALID_ARG;}
             harness_dirty|=changed;
@@ -308,7 +308,7 @@ static esp_err_t data_handler(uint32_t session, const uint8_t *input, ssize_t le
         ok=true;
     }
     take(); unsigned sequence=data_refresh_sequence; give();
-    char reply[304]; int n=snprintf(reply,sizeof(reply),"{\"ok\":%s,\"refresh\":%u,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"max_providers\":8,\"device_control\":1,\"argus_breakdown\":1,\"sample_refresh\":1,\"harness_devices\":1,\"totals\":1}",ok?"true":"false",sequence);
+    char reply[336]; int n=snprintf(reply,sizeof(reply),"{\"ok\":%s,\"refresh\":%u,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"max_providers\":8,\"device_control\":1,\"argus_breakdown\":1,\"sample_refresh\":1,\"harness_devices\":1,\"harness_aggregate\":1,\"totals\":1}",ok?"true":"false",sequence);
     if(n<0 || (size_t)n>=sizeof(reply))return ESP_ERR_INVALID_SIZE;
     *output=(uint8_t *)strdup(reply); if (!*output) return ESP_ERR_NO_MEM;
     *output_len=n; return ESP_OK;

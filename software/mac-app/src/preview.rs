@@ -51,6 +51,8 @@ pub async fn render(directory: &Path) -> Result<()> {
             ),
             ("harness", Nav::Usage, Sheet::None, Tab::Overview),
             ("harness-bottom", Nav::Usage, Sheet::None, Tab::Overview),
+            ("harness-legacy", Nav::Usage, Sheet::None, Tab::Overview),
+            ("harness-conflict", Nav::Usage, Sheet::None, Tab::Overview),
             ("displays", Nav::Displays, Sheet::None, Tab::Overview),
             ("usage", Nav::Usage, Sheet::None, Tab::Overview),
             ("room", Nav::Room, Sheet::None, Tab::Overview),
@@ -231,6 +233,7 @@ pub async fn render(directory: &Path) -> Result<()> {
                             lifetime: Some(180_000_000),
                             peak_daily: None,
                             context: None,
+                            harness_ledger: None,
                             breakdown: None,
                         }],
                         environment: Some(crate::cloud::Environment {
@@ -378,26 +381,85 @@ pub async fn render(directory: &Path) -> Result<()> {
                         "界面样例，不读取真实会话",
                     );
                     h.packet.n = Some(crate::harness::NAME.into());
-                    state.harness_devices = vec![
-                        crate::harness::DeviceUsage {
-                            id: "0000000000000001".into(),
-                            name: "Mac-mini".into(),
+                    let observed_at = today
+                        .and_hms_opt(4, 0, 0)
+                        .unwrap()
+                        .and_utc()
+                        .timestamp_millis();
+                    let sample =
+                        |id: &str,
+                         name: &str,
+                         unique: &str,
+                         input: i64,
+                         output: i64,
+                         cached: i64| crate::harness::DeviceUsage {
+                            id: id.into(),
+                            name: name.into(),
                             t: usage::now(),
-                            d: [day, 9548778],
-                            wt: [week, 9639050],
-                            mt: Some([day - day % 100 + 1, 20_000_000]),
-                            u: [9503090, 45688, 9350016, 102],
-                        },
-                        crate::harness::DeviceUsage {
-                            id: "0000000000000002".into(),
-                            name: "MacBook-Pro".into(),
-                            t: usage::now() - 3600,
-                            d: [day, 4240000],
-                            wt: [week, 12800000],
-                            mt: Some([day - day % 100 + 1, 30_000_000]),
-                            u: [4000000, 240000, 2600000, 80],
-                        },
+                            d: [day, input + output],
+                            wt: [week, input + output],
+                            mt: Some([day - day % 100 + 1, input + output]),
+                            u: [input, output, cached, 2],
+                            ledger: Some(crate::harness::Ledger {
+                                version: 1,
+                                day,
+                                conflict: false,
+                                calls: vec![
+                                    crate::harness::ledger::Call {
+                                        key: "1".repeat(64),
+                                        at: observed_at,
+                                        revision: 1,
+                                        settled: true,
+                                        tokens: [3_000_000, 0, 2_000_000],
+                                    },
+                                    crate::harness::ledger::Call {
+                                        key: unique.repeat(64),
+                                        at: observed_at,
+                                        revision: 1,
+                                        settled: true,
+                                        tokens: [
+                                            (input - 3_000_000) as u64,
+                                            output as u64,
+                                            (cached - 2_000_000) as u64,
+                                        ],
+                                    },
+                                ],
+                            }),
+                        };
+                    state.harness_devices = vec![
+                        sample(
+                            "0000000000000001",
+                            "Mac-mini",
+                            "2",
+                            9_503_090,
+                            45_688,
+                            8_000_000,
+                        ),
+                        sample(
+                            "0000000000000002",
+                            "MacBook-Pro",
+                            "3",
+                            4_000_000,
+                            240_000,
+                            2_600_000,
+                        ),
                     ];
+                    if name == "harness-legacy" {
+                        for d in &mut state.harness_devices {
+                            d.ledger = None;
+                        }
+                    }
+                    if name == "harness-conflict" {
+                        let mut conflicting = state.harness_devices[0].clone();
+                        conflicting.id = "0000000000000002".into();
+                        conflicting.name = "MacBook-Pro".into();
+                        conflicting.u[0] += 1;
+                        conflicting.d[1] += 1;
+                        conflicting.wt[1] += 1;
+                        conflicting.mt.as_mut().unwrap()[1] += 1;
+                        conflicting.ledger.as_mut().unwrap().calls[0].tokens[0] += 1;
+                        state.harness_devices[1] = conflicting;
+                    }
                     state.readings = vec![h];
                 }
 

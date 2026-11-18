@@ -14,7 +14,7 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
         *scope = None;
     }
     ui.horizontal_wrapped(|ui| {
-        if ui.selectable_label(scope.is_none(), "全部设备").clicked() {
+        if ui.selectable_label(scope.is_none(), "去重合计").clicked() {
             *scope = None;
         }
         for device in &r.tokens.devices {
@@ -26,6 +26,19 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
             }
         }
     });
+    if r.packet.s != crate::usage::OK || r.tokens.devices.iter().any(|d| d.ledger.is_none()) {
+        let message = if r.packet.s == crate::usage::OK {
+            &r.tokens.note
+        } else {
+            &r.source
+        };
+        ui.add_space(6.);
+        ui.label(RichText::new(message).size(12.).color(if r.packet.s == 6 {
+            t.error
+        } else {
+            t.secondary
+        }));
+    }
     ui.add_space(14.);
     let selected = scope
         .as_ref()
@@ -100,7 +113,11 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
         });
     }
     ui.add_space(18.);
-    ui.label(RichText::new("设备明细").font(bold(13.)).color(t.secondary));
+    ui.label(
+        RichText::new("各机观测（包含同步副本，不相加）")
+            .font(bold(13.))
+            .color(t.secondary),
+    );
     ui.add_space(7.);
     let mut devices = r.tokens.devices.iter().collect::<Vec<_>>();
     devices.sort_by(|a, b| b.d[1].cmp(&a.d[1]));

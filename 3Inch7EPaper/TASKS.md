@@ -1,6 +1,14 @@
 # 3Inch7EPaper 当前待办
 
-只针对本板Waveshare ESP32-S3-ePaper-3.97及它与HomeCraft的集成。更新日期：2026-11-15。硬件状态看 [固件验证](artifacts/firmware-validation.json)，本地编译成功不等于烧录或用户实屏确认。
+只针对本板Waveshare ESP32-S3-ePaper-3.97及它与HomeCraft的集成。更新日期：2026-11-18。硬件状态看 [固件验证](artifacts/firmware-validation.json)，本地编译成功不等于烧录或用户实屏确认。
+
+## Harness 同步对话去重适配（2026-11-18，未部署）
+
+- [x] 声明 `harness_aggregate:1`，接收 HomeCraft 去重后的单份数字；v1/v2 来源缓存不再作为消费相加，v3 仅保存中枢快照，未知/跨周期不补 0。
+- [x] 旧 Mac 来源包不重新加入中枢合计，`op:harness` 不返回派生快照；支持原大小的缓存恢复，保留绑定/NVS 其他键/SD；同数值刷新不重复写 Flash。
+- [x] C ASan/UBSan 回归覆盖旧缓存、重启、重复与陈旧数据、未知清除水位及周/月独立未知。
+- [x] 重新确认 IDF 6.1 / Python 3.12.15，以本板独立 `build/harness-dedup/` 完成离线构建；32 组 Harness 渲染及原总览检查通过，未操作 USB/蓝牙/Flash；证据见 [本机验证](artifacts/harness-dedup-validation.json)。
+- [ ] 使用新版 Mac 与本板配套固件实测；尚未刷机，日常固件仍为 0.2.38。软件口径见 [用量来源](../software/docs/usage-providers.md#2026-11-18-harness-同步对话去重)。
 
 ## 0.2.38 中枢口径保持（2026-11-15）
 

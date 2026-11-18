@@ -1125,7 +1125,7 @@ impl Home {
                 }
                 if r.packet.p == crate::harness::PROVIDER && !r.tokens.devices.is_empty() {
                     ui.label(
-                        RichText::new(format!("合并 · {} 台 Mac", r.tokens.devices.len()))
+                        RichText::new(format!("去重 · {} 台 Mac", r.tokens.devices.len()))
                             .size(12.)
                             .color(t.secondary),
                     );
@@ -2632,7 +2632,7 @@ impl Home {
             ),
             (
                 "用量统计",
-                "今日／本周／本月分别按 UTC+8 当天、周一和每月1日起算，只合计已取得的有效统计。Codex 周／月来自官方已返回的对应日桶，缺失日期不补0。Argus 为当前文献库数据；DeepSeek Harness 为各台Mac已同步的本机记录。缓存已含在输入中，历史累计和 Claude Code 当前上下文不混入。Codex昨日周额度为同账号昨天最后记录的已用百分比，不能当作昨天新增消耗，缺历史保留未知。",
+                "今日／本周／本月分别按 UTC+8 当天、周一和每月1日起算，只合计已取得的有效统计。Codex 周／月来自官方已返回的对应日桶，缺失日期不补0。Argus 为当前文献库数据；DeepSeek Harness 按同步日志的调用标识去重，旧版总数等待明细后再纳入。缓存已含在输入中，历史累计和 Claude Code 当前上下文不混入。Codex昨日周额度为同账号昨天最后记录的已用百分比，不能当作昨天新增消耗，缺历史保留未知。",
             ),
             (
                 "刷新与后台",

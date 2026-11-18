@@ -14,6 +14,10 @@ use std::{
     time::SystemTime,
 };
 
+pub(super) mod ledger;
+use ledger::Call;
+pub use ledger::Ledger;
+
 pub const PROVIDER: u8 = 4;
 pub const NAME: &str = "DeepSeek Harness";
 const LIMIT: u64 = 9_007_199_254_740_991;
@@ -36,6 +40,8 @@ pub struct DeviceUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mt: Option<[i64; 2]>,
     pub u: [i64; 4],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger: Option<Ledger>,
 }
 impl DeviceUsage {
     pub fn packet(&self) -> Result<usage::Packet> {
@@ -79,6 +85,21 @@ impl DeviceUsage {
             && self.u.iter().all(|n| *n >= 0 && *n <= LIMIT as i64 / 8)
             && self.u[0].checked_add(self.u[1]) == Some(self.d[1])
             && self.u[2] <= self.u[0]
+            && self.ledger.as_ref().is_none_or(|ledger| {
+                ledger.valid()
+                    && ledger.day == self.d[0]
+                    && (ledger.conflict
+                        || ledger.days().is_ok_and(|days| {
+                            reading(&days, ledger::date(ledger.day).unwrap(), origin.clone())
+                                .is_ok_and(|r| {
+                                    r.packet.d == Some(self.d)
+                                        && r.packet.wt == Some(self.wt)
+                                        && r.packet.mt == self.mt
+                                        && r.packet.u.map(|u| [u[0], u[1], u[2], u[3]])
+                                            == Some(self.u)
+                                })
+                        }))
+            })
     }
     pub fn from_reading(r: &Reading) -> Option<Self> {
         let o = r.packet.o.as_ref()?;
@@ -91,6 +112,7 @@ impl DeviceUsage {
             wt: r.packet.wt?,
             mt: r.packet.mt,
             u: [u[0], u[1], u[2], u[3]],
+            ledger: r.tokens.harness_ledger.clone(),
         };
         (r.packet.s == usage::OK && result.valid()).then_some(result)
     }
@@ -100,136 +122,157 @@ pub fn effective(local: &Reading, devices: &[DeviceUsage]) -> Reading {
         return local.clone();
     }
     let mut devices = merge_devices(devices, &local.tokens.devices);
-    // An effective reading still carries the original packet origin for transport compatibility.
-    // Its totals must never replace that origin's raw snapshot on a second presentation pass.
-    if let Some(current) = local
-        .tokens
-        .devices
-        .is_empty()
-        .then(|| DeviceUsage::from_reading(local))
-        .flatten()
+    // An already resolved reading must never become a new local observation.
+    if local.tokens.devices.is_empty()
+        && let Some(current) = DeviceUsage::from_reading(local)
     {
-        if let Some(old) = devices.iter_mut().find(|d| d.id == current.id) {
-            if current.t > old.t
-                || (current.t == old.t && (current.mt.is_some() || old.mt.is_none()))
-            {
-                *old = current;
-            }
-        } else {
-            devices.push(current);
-        }
+        devices = merge_devices(&devices, &[current]);
     }
     if devices.is_empty() {
         return local.clone();
     }
     let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
-    let day = day_id(today);
-    let week =
-        day_id(today - chrono::Duration::days(i64::from(today.weekday().num_days_from_monday())));
-    let month = day_id(today.with_day(1).unwrap());
-    let mut r = local.clone();
-    r.packet.s = usage::OK;
-    r.packet.d = Some([day, 0]);
-    r.packet.wt = Some([week, 0]);
-    r.packet.mt = Some([month, 0]);
-    r.packet.u = Some([0; 5]);
-    for d in &devices {
-        if d.d[0] == day {
-            r.packet.d.as_mut().unwrap()[1] += d.d[1];
-            for i in 0..4 {
-                r.packet.u.as_mut().unwrap()[i] += d.u[i];
+    let ledgers = devices
+        .iter()
+        .filter_map(|d| d.ledger.as_ref())
+        .collect::<Vec<_>>();
+    let mut r = if ledgers.is_empty() {
+        let mut r = usage::empty(PROVIDER, 1, "旧版总数缺少调用明细，等待新版同步");
+        r.packet.n = Some(NAME.into());
+        r
+    } else {
+        match Ledger::union(today, ledgers.iter().copied()).and_then(|ledger| {
+            let days = ledger.days()?;
+            let origin = local.packet.o.clone().unwrap_or_else(|| Origin {
+                id: devices[0].id.clone(),
+                name: devices[0].name.clone(),
+            });
+            let mut r = reading(&days, today, origin)?;
+            // Only a current observation can establish a real zero for today.
+            if !ledgers.iter().any(|l| l.day == day_id(today)) && !days.contains_key(&today) {
+                r.packet.d = None;
+                r.packet.u = None;
+                r.tokens.recent_day = None;
+                r.tokens.input = None;
+                r.tokens.output = None;
+                r.tokens.cached = None;
+                r.tokens.calls = None;
+            }
+            let monday =
+                today - chrono::Duration::days(i64::from(today.weekday().num_days_from_monday()));
+            if !ledgers
+                .iter()
+                .any(|l| ledger::date(l.day).is_some_and(|d| d >= monday))
+            {
+                r.packet.wt = None;
+                r.tokens.weekly = None;
+            }
+            if !ledgers
+                .iter()
+                .any(|l| ledger::date(l.day).is_some_and(|d| d >= today.with_day(1).unwrap()))
+            {
+                r.packet.mt = None;
+                r.tokens.monthly = None;
+            }
+            Ok(r)
+        }) {
+            Ok(r) => r,
+            Err(e) => {
+                let mut r = usage::empty(PROVIDER, 6, &e.to_string());
+                r.packet.n = Some(NAME.into());
+                r
             }
         }
-        if d.wt[0] == week {
-            r.packet.wt.as_mut().unwrap()[1] += d.wt[1];
-        }
-        if let Some(m) = d.mt.filter(|m| m[0] == month) {
-            r.packet.mt.as_mut().unwrap()[1] += m[1];
-        }
-    }
-    let u = r.packet.u.as_mut().unwrap();
-    u[4] = u[3];
-    r.tokens.weekly = devices
-        .iter()
-        .any(|d| d.wt[0] == week)
-        .then_some(r.packet.wt.unwrap()[1] as u64);
-    r.tokens.recent_day = devices
-        .iter()
-        .any(|d| d.d[0] == day)
-        .then_some(r.packet.d.unwrap()[1] as u64);
-    r.tokens.monthly = devices
-        .iter()
-        .any(|d| d.mt.is_some_and(|m| m[0] == month))
-        .then_some(r.packet.mt.unwrap()[1] as u64);
-    r.tokens.input = Some(u[0] as u64);
-    r.tokens.output = Some(u[1] as u64);
-    r.tokens.cached = Some(u[2] as u64);
-    r.tokens.calls = Some(u[3] as u64);
-    if r.tokens.recent_day.is_none() {
-        r.packet.d = None;
-        r.packet.u = None;
-        r.tokens.input = None;
-        r.tokens.output = None;
-        r.tokens.cached = None;
-        r.tokens.calls = None;
-    }
-    if r.tokens.weekly.is_none() {
-        r.packet.wt = None;
-    }
-    if r.tokens.monthly.is_none() {
-        r.packet.mt = None;
-    }
-    r.tokens.note = format!("{} 台 Mac · 已同步的本地记录 · UTC+8", devices.len());
+    };
+    let legacy = devices.iter().filter(|d| d.ledger.is_none()).count();
+    r.tokens.note = if legacy > 0 {
+        format!("调用去重 · {legacy} 台旧版来源待同步明细 · UTC+8")
+    } else {
+        format!("{} 台 Mac 观测 · 调用去重 · UTC+8", devices.len())
+    };
     r.tokens.devices = devices;
     r
 }
 pub fn merge_devices(a: &[DeviceUsage], b: &[DeviceUsage]) -> Vec<DeviceUsage> {
-    let mut result = Vec::<DeviceUsage>::new();
+    let mut sources = BTreeMap::<String, DeviceUsage>::new();
     for d in a.iter().chain(b).filter(|d| d.valid()) {
-        if let Some(old) = result.iter_mut().find(|old| old.id == d.id) {
-            if d.t > old.t || (d.t == old.t && (d.mt.is_some() || old.mt.is_none())) {
+        if let Some(old) = sources.get_mut(&d.id) {
+            let ledger = match (&old.ledger, &d.ledger) {
+                (Some(a), Some(b)) => Some(a.merge(b)),
+                (a, b) => a.clone().or_else(|| b.clone()),
+            };
+            // A device-only total can never supersede verified attempt identities.
+            if (d.ledger.is_some(), d.t, d.mt.is_some(), &d.name)
+                > (old.ledger.is_some(), old.t, old.mt.is_some(), &old.name)
+            {
                 *old = d.clone();
             }
-        } else if result.len() < 8 {
-            result.push(d.clone());
+            if let Some(ledger) = ledger {
+                if let Ok(days) = ledger.days()
+                    && let Ok(mut r) = reading(
+                        &days,
+                        ledger::date(ledger.day).unwrap(),
+                        Origin {
+                            id: old.id.clone(),
+                            name: old.name.clone(),
+                        },
+                    )
+                {
+                    r.packet.t = old.t;
+                    r.tokens.harness_ledger = Some(ledger.clone());
+                    if let Some(merged) = DeviceUsage::from_reading(&r) {
+                        *old = merged;
+                    }
+                }
+                old.ledger = Some(ledger);
+            }
+        } else {
+            sources.insert(d.id.clone(), d.clone());
         }
     }
-    result
+    // Prefer sources with call identities if an old display has a full eight-entry cache.
+    let mut sources = sources.into_values().collect::<Vec<_>>();
+    sources.sort_by(|a, b| {
+        b.ledger
+            .is_some()
+            .cmp(&a.ledger.is_some())
+            .then(a.id.cmp(&b.id))
+    });
+    sources.truncate(8);
+    sources
 }
-/// Per-Mac displays must receive original sources, never an effective aggregate retaining the
-/// local origin. Aggregate-only displays receive one packet and strip its origin at transport.
+/// A per-Mac-only display cannot deduplicate shared conversations. Send no source totals.
+/// Aggregate-capable displays receive the resolved result, without a machine origin.
 pub fn display_packets(reading: &Reading, per_mac: bool) -> Result<Vec<usage::Packet>> {
-    if reading.packet.p == PROVIDER && per_mac && !reading.tokens.devices.is_empty() {
-        return reading
-            .tokens
-            .devices
-            .iter()
-            .map(DeviceUsage::packet)
-            .collect();
+    if reading.packet.p == PROVIDER && per_mac {
+        return Ok(vec![]);
     }
-    Ok(vec![reading.packet.clone()])
-}
-/// Legacy per-Mac firmware rejects an older snapshot, including an equal timestamp with
-/// different values. Read its sources first and send only newer observations; never restamp
-/// a peer's data merely to force it into the device cache.
-pub fn display_updates(reading: &Reading, known: &[DeviceUsage]) -> Result<Vec<usage::Packet>> {
-    Ok(display_packets(reading, true)?
-        .into_iter()
-        .filter(|p| {
-            p.p != PROVIDER
-                || p.s != usage::OK
-                || p.o.as_ref().is_none_or(|o| {
-                    known
-                        .iter()
-                        .find(|d| d.id == o.id)
-                        .is_none_or(|d| p.t > d.t)
-                })
-        })
-        .collect())
+    let mut packet = reading.packet.clone();
+    if packet.p == PROVIDER {
+        if packet.s != usage::OK {
+            // Older aggregate receivers keep previous numbers on a transient error.
+            // Explicitly withdraw this derived value, while the App keeps the real reason.
+            let mut clear = usage::Packet::new(PROVIDER, 0);
+            clear.t = packet.t;
+            clear.n = Some(NAME.into());
+            packet = clear;
+        }
+        packet.o = None;
+        if packet.s == usage::OK && packet.d.is_none() {
+            packet.d = Some([
+                day_id((chrono::Utc::now() + chrono::Duration::hours(8)).date_naive()),
+                -1,
+            ]);
+        }
+    }
+    packet.encode()?;
+    Ok(vec![packet])
 }
 pub fn load_devices(root: &Path) -> Vec<DeviceUsage> {
     let devices: Vec<DeviceUsage> =
-        crate::config::read_private(&root.join(".harness-devices.json")).unwrap_or_default();
+        crate::config::read_private(&root.join(".harness-devices-v2.json"))
+            .or_else(|_| crate::config::read_private(&root.join(".harness-devices.json")))
+            .unwrap_or_default();
     if devices.len() > 8 || devices.iter().any(|d| !d.valid()) {
         return Vec::new();
     }
@@ -253,7 +296,7 @@ pub fn save_devices(root: &Path, devices: &[DeviceUsage]) -> Result<()> {
             .open(&tmp)?;
         file.write_all(&serde_json::to_vec(devices)?)?;
         file.sync_all()?;
-        fs::rename(&tmp, root.join(".harness-devices.json"))?;
+        fs::rename(&tmp, root.join(".harness-devices-v2.json"))?;
         Ok(())
     })();
     if result.is_err() {
@@ -461,6 +504,7 @@ impl Day {
 struct Session {
     id: String,
     days: BTreeMap<NaiveDate, Day>,
+    calls: BTreeMap<String, Call>,
 }
 #[derive(Default)]
 struct Fold {
@@ -470,6 +514,7 @@ struct Fold {
     seeded: bool,
     marker: bool,
     last: Option<((u64, u64), NaiveDate, Day)>,
+    retries: HashMap<(u64, u64), u64>,
 }
 impl Fold {
     fn row(&mut self, row: Row) -> Result<()> {
@@ -493,11 +538,19 @@ impl Fold {
         if row.kind == "session/end-seed" && row.data.inherited {
             ensure!(self.seeded, "Harness 继承边界无效");
             self.result.days.clear();
+            self.result.calls.clear();
+            self.retries.clear();
             self.last = None;
             self.marker = true;
             return Ok(());
         }
         if row.kind == "llm/retry-started" {
+            let key = row
+                .data
+                .turn
+                .zip(row.data.step)
+                .ok_or_else(|| anyhow::anyhow!("Harness 重试缺少轮次或步骤"))?;
+            *self.retries.entry(key).or_default() += 1;
             if self.last.is_some_and(|(key, _, _)| {
                 Some(key.0) == row.data.turn && Some(key.1) == row.data.step
             }) {
@@ -522,10 +575,10 @@ impl Fold {
         let millis = row
             .time
             .ok_or_else(|| anyhow::anyhow!("Harness 用量缺少时间"))?;
-        let date = (chrono::DateTime::from_timestamp_millis(millis)
+        let date = chrono::DateTime::from_timestamp_millis(millis)
+            .and_then(|t| t.checked_add_signed(chrono::Duration::hours(8)))
             .ok_or_else(|| anyhow::anyhow!("Harness 时间无效"))?
-            + chrono::Duration::hours(8))
-        .date_naive();
+            .date_naive();
         ensure!((2025..=2099).contains(&date.year()), "Harness 时间越界");
         let key = (
             row.data
@@ -541,6 +594,32 @@ impl Fold {
             self.result.days.get_mut(&old_day).unwrap().sub(old);
         }
         let value = sample.summary()?;
+        let identity = Call::key(
+            &self.result.id,
+            key.0,
+            key.1,
+            self.retries.get(&key).copied().unwrap_or(0),
+        );
+        ensure!(
+            !self.result.calls.contains_key(&identity)
+                || self.last.is_some_and(|(old, _, _)| old == key),
+            "Harness 调用顺序冲突，等待核对"
+        );
+        let revision = self
+            .result
+            .calls
+            .get(&identity)
+            .map_or(1, |c| c.revision + 1);
+        self.result.calls.insert(
+            identity.clone(),
+            Call {
+                key: identity,
+                at: millis,
+                revision,
+                settled: row.kind == "assistant/message",
+                tokens: [value.input, value.output, value.cached],
+            },
+        );
         self.result.days.entry(date).or_default().add(value)?;
         self.last = Some((key, date, value));
         Ok(())
@@ -661,10 +740,9 @@ struct Cached {
     modified: SystemTime,
     session: Session,
 }
-fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>) -> Result<BTreeMap<NaiveDate, Day>> {
+fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>, today: NaiveDate) -> Result<Ledger> {
     let mut found = HashSet::new();
-    let mut ids = HashSet::new();
-    let mut days = BTreeMap::<NaiveDate, Day>::new();
+    let mut calls = Vec::new();
     let mut count = 0;
     for project in fs::read_dir(root)? {
         let project = project?;
@@ -730,14 +808,11 @@ fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>) -> Result<BTreeMap<Na
                 session
             };
             found.insert(path);
-            ensure!(ids.insert(session.id), "Harness 出现重复会话，未合并计数");
-            for (day, value) in session.days {
-                days.entry(day).or_default().add(value)?;
-            }
+            calls.extend(session.calls.into_values());
         }
     }
     cache.retain(|p, _| found.contains(p));
-    Ok(days)
+    Ledger::new(today, calls)
 }
 fn day_id(day: NaiveDate) -> i64 {
     i64::from(day.year()) * 10000 + i64::from(day.month()) * 100 + i64::from(day.day())
@@ -793,18 +868,17 @@ pub async fn collect(root: &Path) -> Reading {
         let Some(sessions) = sessions.filter(|s| s.is_dir()) else {
             return result;
         };
-        let read = (|| {
+        let read: Result<Reading> = (|| {
             let origin = Origin::local(&root)?;
             let mut cache = CACHE
                 .get_or_init(|| Mutex::new(HashMap::new()))
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Harness 缓存不可用"))?;
-            let days = scan(&sessions, &mut cache)?;
-            reading(
-                &days,
-                (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive(),
-                origin,
-            )
+            let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+            let ledger = scan(&sessions, &mut cache, today)?;
+            let mut result = reading(&ledger.days()?, today, origin)?;
+            result.tokens.harness_ledger = Some(ledger);
+            Ok(result)
         })();
         read.unwrap_or_else(|e| {
             result.packet.s = 6;
@@ -818,6 +892,34 @@ pub async fn collect(root: &Path) -> Reading {
         r.packet.n = Some(NAME.into());
         r
     })
+}
+
+#[cfg(test)]
+pub(crate) fn test_reading(id: &str, n: u64) -> Reading {
+    let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+    let call = Call {
+        key: Call::key(id, 1, 1, 0),
+        at: today
+            .and_hms_opt(4, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis(),
+        revision: 1,
+        settled: true,
+        tokens: [n, 0, 0],
+    };
+    let ledger = Ledger::new(today, [call]).unwrap();
+    let mut r = reading(
+        &ledger.days().unwrap(),
+        today,
+        Origin {
+            id: id.into(),
+            name: "Test Mac".into(),
+        },
+    )
+    .unwrap();
+    r.tokens.harness_ledger = Some(ledger);
+    r
 }
 
 #[cfg(test)]
@@ -884,6 +986,9 @@ mod tests {
         .unwrap();
         assert_eq!(s.days[&date()].total(), 430);
         assert_eq!(s.days[&date()].calls, 2);
+        let ledger = Ledger::new(date(), s.calls.into_values()).unwrap();
+        assert_eq!(ledger.calls.len(), 2);
+        assert_eq!(ledger.days().unwrap()[&date()].total(), 430);
     }
     #[test]
     fn inherited_calls_are_excluded_and_missing_cut_is_refused() {
@@ -898,6 +1003,51 @@ mod tests {
             165
         );
         assert!(parse(&encode(&rows[..2]), false).is_err());
+        assert_eq!(parse(&encode(&rows), false).unwrap().calls.len(), 1);
+    }
+    #[test]
+    fn generation_migration_and_physical_row_changes_preserve_call_identity() {
+        let mut old_header = header(false);
+        old_header["version"] = json!(2);
+        let old = parse(&encode(&[old_header, message(0, 100)]), false).unwrap();
+        let new = parse(
+            &encode(&[
+                header(false),
+                event(0, "ignored", json!({})),
+                message(1, 100),
+            ]),
+            false,
+        )
+        .unwrap();
+        let merged = Ledger::new(
+            date(),
+            old.calls.into_values().chain(new.calls.into_values()),
+        )
+        .unwrap();
+        assert_eq!(merged.calls.len(), 1);
+        assert_eq!(merged.days().unwrap()[&date()].total(), 165);
+    }
+    #[test]
+    fn private_device_cache_retains_call_identities_after_restart() {
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("harness-restart-{:016x}", rand::random::<u64>()));
+        fs::create_dir(&root).unwrap();
+        let r = test_reading("1111111111111111", 100);
+        let d = DeviceUsage::from_reading(&r).unwrap();
+        save_devices(&root, std::slice::from_ref(&d)).unwrap();
+        assert_eq!(
+            fs::metadata(root.join(".harness-devices-v2.json"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let loaded = load_devices(&root);
+        assert_eq!(loaded, vec![d]);
+        assert_eq!(effective(&r, &loaded).packet.d.unwrap()[1], 100);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn concatenated_frames_and_incomplete_tail() {
@@ -938,9 +1088,15 @@ mod tests {
         )
         .unwrap();
         let mut cache = HashMap::new();
-        assert_eq!(scan(&root, &mut cache).unwrap()[&date()].total(), 165);
+        assert_eq!(
+            scan(&root, &mut cache, date()).unwrap().days().unwrap()[&date()].total(),
+            165
+        );
         assert_eq!(cache.len(), 1);
-        assert_eq!(scan(&root, &mut cache).unwrap()[&date()].total(), 165);
+        assert_eq!(
+            scan(&root, &mut cache, date()).unwrap().days().unwrap()[&date()].total(),
+            165
+        );
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -954,62 +1110,100 @@ mod tests {
         assert!(parse(&encode(&[header(false), m]), false).is_err());
     }
     #[test]
-    fn two_macs_replace_without_echoing_the_aggregate_and_ignore_stale_days() {
-        let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
-        let mut days = BTreeMap::new();
-        days.insert(
-            today,
-            Day {
-                input: 100,
-                output: 20,
-                cached: 40,
-                calls: 2,
-            },
-        );
-        let local = reading(&days, today, origin("0000000000000001")).unwrap();
+    fn synced_calls_union_and_repeated_presentation_never_add_copies() {
+        let local = test_reading("0000000000000001", 120);
         let mut other = DeviceUsage::from_reading(&local).unwrap();
         other.id = "0000000000000002".into();
-        let merged = effective(
-            &local,
-            &[DeviceUsage::from_reading(&local).unwrap(), other.clone()],
-        );
-        assert_eq!(merged.packet.d.unwrap()[1], 240);
+        let merged = effective(&local, &[other]);
+        assert_eq!(merged.packet.d.unwrap()[1], 120);
+        assert_eq!(merged.tokens.calls, Some(1));
         assert_eq!(merged.tokens.devices.len(), 2);
-        assert_eq!(local.packet.d.unwrap()[1], 120);
-        let packets = display_packets(&merged, true).unwrap();
-        assert_eq!(packets.len(), 2);
-        assert!(packets.iter().all(|p| p.d.unwrap()[1] == 120));
-        assert_ne!(
-            packets[0].o.as_ref().unwrap().id,
-            packets[1].o.as_ref().unwrap().id
-        );
         assert_eq!(
-            display_packets(&merged, false).unwrap()[0].d.unwrap()[1],
-            240
+            effective(&merged, &merged.tokens.devices).packet.d,
+            merged.packet.d
         );
-        // A local reader, without an aggregate view, remains a single stable source.
-        assert_eq!(display_packets(&local, true).unwrap()[0].d.unwrap()[1], 120);
-        assert_eq!(
-            display_updates(&merged, &merged.tokens.devices)
-                .unwrap()
-                .len(),
-            0
+        assert!(display_packets(&merged, true).unwrap().is_empty());
+        let wire = display_packets(&merged, false).unwrap();
+        assert_eq!(wire.len(), 1);
+        assert_eq!(wire[0].d.unwrap()[1], 120);
+        assert!(wire[0].o.is_none());
+    }
+    #[test]
+    fn partial_sync_preserves_disjoint_calls_and_ignores_legacy_totals() {
+        let local = test_reading("0000000000000001", 120);
+        let other = test_reading("0000000000000002", 30);
+        let mut legacy = DeviceUsage::from_reading(&local).unwrap();
+        legacy.id = "0000000000000003".into();
+        legacy.ledger = None;
+        let result = effective(
+            &local,
+            &[DeviceUsage::from_reading(&other).unwrap(), legacy.clone()],
         );
-        let mut newer = merged.tokens.devices.clone();
-        newer[0].t += 1;
-        assert_eq!(display_updates(&merged, &newer).unwrap().len(), 0);
-        let mut older = merged.tokens.devices.clone();
-        older[0].t -= 1;
-        let updates = display_updates(&merged, &older).unwrap();
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].o.as_ref().unwrap().id, older[0].id);
-        assert_eq!(updates[0].t, local.packet.t);
-        assert_eq!(
-            merged.packet.u.unwrap()[0] + merged.packet.u.unwrap()[1],
-            240
+        for value in [result.packet.d, result.packet.wt, result.packet.mt] {
+            assert_eq!(value.unwrap()[1], 150);
+        }
+        assert_eq!(result.tokens.calls, Some(2));
+        let mut old = local.clone();
+        old.tokens.harness_ledger = None;
+        let unknown = effective(&old, &[legacy]);
+        assert!(
+            unknown.packet.d.is_none()
+                && unknown.packet.wt.is_none()
+                && unknown.packet.mt.is_none()
         );
-        other.d[0] = day_id(today - chrono::Duration::days(1));
-        assert_eq!(effective(&local, &[other]).packet.d.unwrap()[1], 120);
+        assert_ne!(unknown.packet.s, usage::OK);
+    }
+    #[test]
+    fn local_duplicate_paths_are_deduplicated_and_conflicts_fail_closed() {
+        let root =
+            std::env::temp_dir().join(format!("harness-copies-{:016x}", rand::random::<u64>()));
+        for name in ["a/s", "b/s"] {
+            fs::create_dir_all(root.join(name)).unwrap();
+            fs::write(
+                root.join(name).join("session.v4.jsonl"),
+                encode(&[header(false), message(0, 100)]),
+            )
+            .unwrap();
+        }
+        let mut cache = HashMap::new();
+        let full = scan(&root, &mut cache, date()).unwrap();
+        assert_eq!(full.calls.len(), 1);
+        assert_eq!(full.days().unwrap()[&date()].total(), 165);
+        fs::write(
+            root.join("b/s/session.v4.jsonl"),
+            encode(&[header(false), message(0, 222)]),
+        )
+        .unwrap();
+        assert!(scan(&root, &mut cache, date()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn cross_mac_conflicts_and_legacy_newer_snapshots_cannot_forge_totals() {
+        let local = test_reading("0000000000000001", 120);
+        let a = DeviceUsage::from_reading(&local).unwrap();
+        let mut older_copy = a.clone();
+        older_copy.ledger = None;
+        older_copy.t += 100;
+        assert!(
+            merge_devices(std::slice::from_ref(&a), &[older_copy])[0]
+                .ledger
+                .is_some()
+        );
+        let mut conflict = a.clone();
+        conflict.id = "0000000000000002".into();
+        conflict.d[1] += 1;
+        conflict.wt[1] += 1;
+        conflict.mt.as_mut().unwrap()[1] += 1;
+        conflict.u[0] += 1;
+        conflict.ledger.as_mut().unwrap().calls[0].tokens[0] += 1;
+        assert!(conflict.valid());
+        let r = effective(&local, &[conflict]);
+        assert_eq!(r.packet.s, 6);
+        assert!(r.packet.d.is_none() && r.packet.wt.is_none() && r.packet.mt.is_none());
+        let clear = display_packets(&r, false).unwrap().remove(0);
+        assert_eq!(clear.s, 0);
+        assert!(clear.o.is_none() && clear.d.is_none() && clear.u.is_none());
+        assert_eq!(r.packet.s, 6); // The App still explains the original conflict.
     }
     #[test]
     fn origin_extension_requires_explicit_capability_and_stays_under_gatt_limit() {

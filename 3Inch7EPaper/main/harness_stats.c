@@ -20,9 +20,30 @@ static bool valid(const harness_device_t *d)
         d->input>=0 && d->output>=0 && d->input<=d->daily && d->output==d->daily-d->input &&
         d->cached>=0 && d->cached<=d->input && d->calls>=0 && d->calls<=limit;
 }
+// Version 3 contains one hub-deduplicated snapshot. Its reserved identity is never
+// exposed by the legacy per-Mac command or combined with machine observations.
+static const char aggregate_id[]="0000000000000000";
+static bool aggregate_valid(const harness_device_t *d)
+{
+    const int64_t limit=9007199254740991LL/HARNESS_MAX_DEVICES;
+    return label(d->id,sizeof(d->id),true) && label(d->name,sizeof(d->name),false) &&
+        !strcmp(d->id,aggregate_id) && !strcmp(d->name,"Shared Harness") &&
+        d->fetched_at>=1735689600 && d->fetched_at<=4102444800 && usage_week_start(d->day)!=0 &&
+        d->daily>=-1 && d->daily<=limit && d->weekly>=-1 && d->weekly<=limit &&
+        (d->daily<0 || d->weekly<0 || d->weekly>=d->daily) &&
+        (d->daily<0 || d->monthly<0 || d->monthly>=d->daily) &&
+        ((!d->week && d->weekly==-1) || d->week==usage_week_start(d->day)) &&
+        ((!d->month && d->monthly==-1) || (d->month==usage_month_start(d->day) && d->monthly>=0 && d->monthly<=limit)) &&
+        d->input>=0 && d->output>=0 && d->cached>=0 && d->cached<=d->input && d->calls>=0 && d->calls<=limit &&
+        (d->daily<0 ? (!d->input && !d->output && !d->cached && !d->calls) :
+         (d->input<=d->daily && d->output==d->daily-d->input));
+}
 bool harness_stats_valid(const harness_stats_t *s)
 {
-    if(!s || s->version!=2 || s->count>HARNESS_MAX_DEVICES)return false;
+    if(!s)return false;
+    if(s->version==3)return (s->count==0 && (!s->devices[0].fetched_at ||
+        (s->devices[0].fetched_at>=1735689600 && s->devices[0].fetched_at<=4102444800))) || (s->count==1 && aggregate_valid(&s->devices[0]));
+    if(s->version!=2 || s->count>HARNESS_MAX_DEVICES)return false;
     for(unsigned i=0;i<s->count;++i) {
         if(!valid(&s->devices[i]))return false;
         for(unsigned j=0;j<i;++j)if(!strcmp(s->devices[i].id,s->devices[j].id))return false;
@@ -49,7 +70,28 @@ bool harness_stats_restore(const void *blob,size_t length,harness_stats_t *out)
 bool harness_stats_update(harness_stats_t *s,const usage_record_t *r,bool *changed)
 {
     *changed=false;
-    if(!s || !r || r->status!=USAGE_OK || !r->usage_available || strcmp(r->name,"DeepSeek Harness"))return false;
+    if(!s || !r || strcmp(r->name,"DeepSeek Harness"))return false;
+    if(!r->source_id[0]) {
+        if(s->version==3 && r->fetched_at<s->devices[0].fetched_at)return true;
+        harness_stats_t next={.version=3};
+        next.devices[0].fetched_at=r->fetched_at;
+        if(r->status==USAGE_OK) {
+            harness_device_t *d=&next.devices[0];
+            strcpy(d->id,aggregate_id);strcpy(d->name,"Shared Harness");
+            d->fetched_at=r->fetched_at;d->day=r->token_day;d->week=r->token_week;d->month=r->token_month;
+            d->daily=r->daily_tokens;d->weekly=r->weekly_tokens;d->monthly=r->monthly_tokens;
+            d->input=r->input_tokens;d->output=r->output_tokens;d->cached=r->cached_tokens;d->calls=r->calls;
+            if(!aggregate_valid(d))return false;
+            next.count=1;
+        }
+        harness_stats_t previous=*s;
+        if(previous.version==3)previous.devices[0].fetched_at=next.devices[0].fetched_at;
+        *changed=memcmp(&previous,&next,sizeof(next))!=0;*s=next;return true;
+    }
+    // Old Macs may still connect. After the first authoritative aggregate, their
+    // overlapping machine totals are acknowledged but cannot replace or enlarge it.
+    if(s->version==3)return true;
+    if(r->status!=USAGE_OK || !r->usage_available)return false;
     harness_device_t d={0};
     memcpy(d.id,r->source_id,sizeof(d.id));memcpy(d.name,r->source_name,sizeof(d.name));
     d.fetched_at=r->fetched_at;d.day=r->token_day;d.week=r->token_week;d.daily=r->daily_tokens;d.weekly=r->weekly_tokens;
@@ -71,7 +113,7 @@ bool harness_stats_update(harness_stats_t *s,const usage_record_t *r,bool *chang
 void harness_stats_total(const harness_stats_t *s,int day,usage_record_t *out)
 {
     usage_record_init(out);strcpy(out->name,"DeepSeek Harness");
-    if(!s || !s->count || !harness_stats_valid(s))return;
+    if(!s || s->version!=3 || !s->count || !harness_stats_valid(s))return;
     int week=usage_week_start(day);if(!week)return;
     out->configured=out->has_data=out->usage_available=true;out->status=USAGE_OK;
     bool daily_known=false,weekly_known=false,monthly_known=false;
@@ -80,8 +122,8 @@ void harness_stats_total(const harness_stats_t *s,int day,usage_record_t *out)
     for(unsigned i=0;i<s->count;++i) {
         const harness_device_t *d=&s->devices[i];
         if(d->fetched_at>out->fetched_at)out->fetched_at=d->fetched_at;
-        if(d->day==day) {daily_known=true;out->daily_tokens+=d->daily;out->input_tokens+=d->input;out->output_tokens+=d->output;out->cached_tokens+=d->cached;out->calls+=d->calls;}
-        if(d->week==week){weekly_known=true;out->weekly_tokens+=d->weekly;}
+        if(d->day==day && d->daily>=0) {daily_known=true;out->daily_tokens+=d->daily;out->input_tokens+=d->input;out->output_tokens+=d->output;out->cached_tokens+=d->cached;out->calls+=d->calls;}
+        if(d->week==week && d->weekly>=0){weekly_known=true;out->weekly_tokens+=d->weekly;}
         if(d->month==out->token_month && d->monthly>=0){monthly_known=true;out->monthly_tokens+=d->monthly;}
     }
     if(!daily_known){out->daily_tokens=-1;out->usage_available=false;}
@@ -92,6 +134,7 @@ void harness_stats_total(const harness_stats_t *s,int day,usage_record_t *out)
 bool harness_stats_encode(const harness_stats_t *s,unsigned offset,char out[481])
 {
     if(!s || offset>=HARNESS_MAX_DEVICES || (s->version && !harness_stats_valid(s)))return false;
+    if(s->version==3){snprintf(out,481,"{\"ok\":true,\"v\":1,\"count\":0,\"offset\":%u,\"devices\":[]}",offset);return true;}
     int n=snprintf(out,481,"{\"ok\":true,\"v\":1,\"count\":%u,\"offset\":%u,\"devices\":[",(unsigned)s->count,offset);
     for(unsigned i=offset;i<s->count && i<offset+1;++i) {
         const harness_device_t *d=&s->devices[i];

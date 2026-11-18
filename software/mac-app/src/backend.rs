@@ -644,17 +644,12 @@ impl Link {
         Ok(crate::device::History::assemble(chunks, usage::now()).ok())
     }
     async fn send_usage(&mut self, packet: &usage::Packet) -> Result<u64> {
-        if packet.p == crate::harness::PROVIDER
-            && !self.harness_supported
-            && !self.harness_aggregate_supported
-        {
+        if packet.p == crate::harness::PROVIDER && !self.harness_aggregate_supported {
             return Ok(0);
         }
         if packet.p == crate::harness::PROVIDER {
             let mut packet = packet.clone();
-            if self.harness_aggregate_supported && !self.harness_supported {
-                packet.o = None;
-            }
+            packet.o = None;
             if !self.monthly_supported {
                 packet.mt = None;
             }
@@ -712,12 +707,10 @@ impl Link {
     }
     async fn send_reading(&mut self, reading: &usage::Reading) -> Result<u64> {
         let mut sequence = 0;
-        let packets = if self.harness_supported && reading.packet.p == crate::harness::PROVIDER {
-            let known = self.harness_devices().await?;
-            crate::harness::display_updates(reading, &known)?
-        } else {
-            crate::harness::display_packets(reading, false)?
-        };
+        if reading.packet.p == crate::harness::PROVIDER && !self.harness_aggregate_supported {
+            return Ok(0);
+        }
+        let packets = crate::harness::display_packets(reading, false)?;
         for packet in packets {
             sequence = self.send_usage(&packet).await?;
         }
@@ -1833,13 +1826,8 @@ pub async fn worker(
                                     .map(|s| s.harness_devices.clone())
                                     .unwrap_or_default();
                                 let merged = crate::harness::merge_devices(&cached, &devices);
-                                // HomeCraft owns the durable per-Mac cache. Restore a display's
-                                // missing/older snapshots individually, never echo an aggregate.
-                                for d in &merged {
-                                    if !devices.iter().any(|old| old == d) {
-                                        l.send_usage(&d.packet()?).await?;
-                                    }
-                                }
+                                // Legacy totals are observation-only: they cannot be restored as
+                                // independent consumption once Harness conversations synchronize.
                                 events.update(|s| {
                                     s.harness_devices = merged;
                                     if crate::harness::save_devices(&root, &s.harness_devices)

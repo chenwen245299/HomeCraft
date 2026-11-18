@@ -15,7 +15,7 @@
 - Codex 仅用官方app-server公开方法读取账号、额度和Token；不读auth.json、解析登录令牌、发起模型调用或恢复私有HTTP用量接口。
 - Claude 只接官方Claude Code `statusLine`，不读OAuth凭据。其Token是当前上下文含缓存，不能称为账户累计消费；桌面Claude或样例不是Code真实会话验证。
 - Argus只用官方本机STDIO MCP `get_token_usage`，尊重MCP开关，只读汇总，不读数据库、逐条records、供应商配置或凭据。缓存已包含输入，不重复相加。
-- DeepSeek官方API余额与DeepSeek Harness本机用量是独立来源，UI使用全称DeepSeek Harness。Harness只读公开本机记录、按稳定来源覆盖合并，不能把多机合计再作为本机数发送。
+- DeepSeek官方API余额与DeepSeek Harness本机用量是独立来源，UI使用全称DeepSeek Harness。Harness只读公开本机记录；对话跨机同步时按会话/轮次/步骤/重试的脱敏调用标识取并集，再汇总周期用量。机器仅是观测来源，旧版总数不参与相加，不能把合计作为本机观测再次发布。
 - 同一Codex账号跨Mac不重复相加；账号读取前后核对一致，仅保存允许的脱敏标识。iCloud只同步允许的数值摘要，历史绑定、账户凭据不随包或数据摘要迁移。
 - 周/月按UTC+8自然周期，缺日期/字段保持未知，不能补0、用昨天冒充今天或用累计差值推算。Codex昨日行取真实昨日桶和同账号昨日最后有效周额度快照，后者是历史已用比例，不是昨日新增消费。
 - 保留默认30秒读取/下发、独立BLE保活与手动刷新。DeepSeek余额至少300秒，429后至少900秒；自动轮询频率不等于官方日桶生成频率。完整规则以实现和来源文档为准。

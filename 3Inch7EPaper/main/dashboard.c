@@ -581,7 +581,7 @@ static void harness_page(canvas_t *c,const dashboard_state_t *s)
     unsigned count=s->network.harness.count;int y=top+(portrait?238:149);
     int name_room=portrait?124:316,first=32+name_room,col=(canvas_width(c)-32-first)/3;
     const bitmap_font_t *heading=count<=4?&font20:&font16;
-    canvas_text(c,32,y,"设备",heading,1,true);
+    canvas_text(c,32,y,s->network.harness.version==3?"统计":"设备",heading,1,true);
     for(unsigned i=0;i<3;++i)canvas_text(c,first+(int)i*col+(col-canvas_text_width(labels[i],heading,1))/2,y,labels[i],heading,1,true);
     y+=count<=4?36:28;int row=count?(canvas_height(c)-48-y)/(int)count:40;if(row>100)row=100;
     const bitmap_font_t *name_font=row>=65?&font_bold28:(row>=40?&font_bold24:(row>=28?&font_bold20:&font_bold16));
@@ -611,7 +611,7 @@ static void provider_page(canvas_t *c, const dashboard_state_t *s, unsigned prov
     if(provider==PROVIDER_ARGUS) {
         argus_page_render(c,s);return;
     }
-    if(provider==PROVIDER_EXTRA1 && s->network.harness.count) {harness_page(c,s);return;}
+    if(provider==PROVIDER_EXTRA1 && s->network.harness.version==3 && s->network.harness.count) {harness_page(c,s);return;}
     if(provider>PROVIDER_ARGUS) {
         int height=portrait?580:300;
         canvas_round_box(c,24,100,canvas_width(c)-48,height,12,2);
@@ -884,7 +884,7 @@ void dashboard_render(canvas_t *c, const dashboard_state_t *s)
                    portrait ? 432 : 364, card_height, &s->quota.secondary, s->has_quota, true, NULL, false);
         if (page == PAGE_OVERVIEW) environment_strip(c, s, portrait ? 548 : 314, portrait ? 144 : 104);
     }
-    if((provider==PROVIDER_ARGUS || (provider==PROVIDER_EXTRA1 && s->network.harness.count)) && s->network.started) {footer_page(c,s,page);return;}
+    if((provider==PROVIDER_ARGUS || (provider==PROVIDER_EXTRA1 && s->network.harness.version==3 && s->network.harness.count)) && s->network.started) {footer_page(c,s,page);return;}
     if(page==PAGE_OVERVIEW && s->network.started) {
         const char *hint=portrait?"BOOT 翻页 · 双击同步":"BOOT 翻页 / 双击同步    PWR 上一页 / 双击旋转";
         canvas_text(c,20,height-28,hint,&font20,1,true);

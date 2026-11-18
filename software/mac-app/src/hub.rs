@@ -105,6 +105,9 @@ mod tests {
         }
     }
     fn reading(p: u8, id: &str, n: i64) -> Reading {
+        if p == 4 {
+            return harness::test_reading(id, n as u64);
+        }
         let mut r = usage::empty(p, usage::OK, "test original");
         let day = model::day();
         r.packet.d = Some([day, n]);
@@ -151,8 +154,8 @@ mod tests {
         let (a, b) = pair();
         let day = model::day();
         assert_eq!(model::today_total(&a, day), Some(1230));
-        assert_eq!(model::week_total(&a, day), Some(2460));
-        assert_eq!(model::month_total(&a, day), Some(3690));
+        assert_eq!(model::week_total(&a, day), Some(2430));
+        assert_eq!(model::month_total(&a, day), Some(3630));
         assert_eq!(model::totals_wire(&a, day), model::totals_wire(&b, day));
         for state in [a, b] {
             let view = cloud::presentation(state.clone());
@@ -237,12 +240,12 @@ mod tests {
         a.readings[0].packet.wt = None;
         a.readings[0].packet.mt = None;
         assert_eq!(model::today_total(&a, model::day()), Some(1230));
-        assert_eq!(model::week_total(&a, model::day()), Some(2460));
-        assert_eq!(model::month_total(&a, model::day()), Some(3690));
+        assert_eq!(model::week_total(&a, model::day()), Some(2430));
+        assert_eq!(model::month_total(&a, model::day()), Some(3630));
         a.cloud_data = catalog(&a);
         a.readings.clear();
         assert_eq!(model::today_total(&a, model::day()), Some(1230));
-        assert_eq!(model::week_total(&a, model::day()), Some(2460));
-        assert_eq!(model::month_total(&a, model::day()), Some(3690));
+        assert_eq!(model::week_total(&a, model::day()), Some(2430));
+        assert_eq!(model::month_total(&a, model::day()), Some(3630));
     }
 }

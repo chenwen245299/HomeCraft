@@ -460,6 +460,7 @@ mod tests {
                 lifetime: None,
                 peak_daily: None,
                 context: None,
+                harness_ledger: None,
                 breakdown: None,
             }],
             environment: None,

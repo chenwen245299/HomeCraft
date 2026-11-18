@@ -17,6 +17,11 @@ int main(int argc,char **argv)
             r.status=USAGE_OK;r.has_data=r.usage_available=true;r.fetched_at=now;r.token_day=day;r.token_week=usage_week_start(day);r.daily_tokens=r.input_tokens=9548778+i*10000;r.weekly_tokens=r.daily_tokens+100000;r.token_month=usage_month_start(day);r.monthly_tokens=r.daily_tokens+10000000;
             bool changed;assert(harness_stats_update(&s.network.harness,&r,&changed));
         }
+        usage_record_t shared;usage_record_init(&shared);strcpy(shared.name,"DeepSeek Harness");
+        shared.status=USAGE_OK;shared.has_data=shared.usage_available=true;shared.fetched_at=now;
+        shared.token_day=day;shared.token_week=usage_week_start(day);shared.token_month=usage_month_start(day);
+        shared.daily_tokens=shared.input_tokens=9548778;shared.weekly_tokens=19639050;shared.monthly_tokens=30000000;
+        bool changed;assert(harness_stats_update(&s.network.harness,&shared,&changed));
         harness_stats_total(&s.network.harness,day,&s.network.providers[4]);
         memset(guarded,0xab,sizeof(guarded));canvas_t canvas={.pixels=guarded,.rotation=rotation};dashboard_render(&canvas,&s);
         for(unsigned i=SCREEN_BYTES;i<sizeof(guarded);++i)assert(guarded[i]==0xab);
