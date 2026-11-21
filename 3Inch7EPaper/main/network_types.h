@@ -1,7 +1,6 @@
 #pragma once
 #include "usage.h"
 #include "usage_breakdown.h"
-#include "harness_stats.h"
 #define EPAPER_PROVISION_USERNAME "wifiprov"
 typedef struct {
     bool started, wifi_configured, connected, clock_ready, setup_active, ble_active, wifi_running;
@@ -18,5 +17,4 @@ typedef struct {
     usage_record_t providers[PROVIDER_COUNT];
     usage_totals_t hub_totals;
     usage_breakdown_t argus_breakdown;
-    harness_stats_t harness;
 } network_snapshot_t;

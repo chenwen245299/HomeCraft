@@ -69,7 +69,7 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
     if (!text || strlen(text) > 480) return false;
     cJSON *json = cJSON_ParseWithOpts(text, NULL, true);
     bool valid = cJSON_IsObject(json);
-    const char *keys[] = {"v", "p", "t", "s", "w", "b", "c", "mu", "ml", "d", "ld", "n", "u", "dc", "wt", "o", "mt", "yd"};
+    const char *keys[] = {"v", "p", "t", "s", "w", "b", "c", "mu", "ml", "d", "ld", "n", "u", "dc", "wt", "mt", "yd"};
     const unsigned key_count=sizeof(keys)/sizeof(keys[0]);
     unsigned seen = 0;
     for (const cJSON *item = valid ? json->child : NULL; item; item = item->next) {
@@ -164,14 +164,6 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
             if(valid) strcpy(fresh.name,name->valuestring);
         }
         if(valid && p>=3 && !name) valid=false;
-        const cJSON *origin=field(json,"o");
-        if(valid && origin) {
-            const cJSON *id=cJSON_GetObjectItemCaseSensitive(origin,"id"),*label=cJSON_GetObjectItemCaseSensitive(origin,"name");
-            valid=p==PROVIDER_EXTRA1 && !strcmp(fresh.name,"DeepSeek Harness") && cJSON_IsObject(origin) && cJSON_GetArraySize(origin)==2 && cJSON_IsString(id) && cJSON_IsString(label) && strlen(id->valuestring)==16 && label->valuestring[0] && strlen(label->valuestring)<=24;
-            if(valid)for(const char *s=id->valuestring;*s;++s)if(!strchr("0123456789abcdef",*s)){valid=false;break;}
-            if(valid)for(const char *s=label->valuestring;*s;++s)if(!((*s>='A'&&*s<='Z')||(*s>='a'&&*s<='z')||(*s>='0'&&*s<='9')||strchr(" ._-",*s))){valid=false;break;}
-            if(valid){strcpy(fresh.source_id,id->valuestring);strcpy(fresh.source_name,label->valuestring);}
-        }
         const cJSON *usage=field(json,"u");
         if(valid && usage) {
             int64_t values[5];
@@ -189,46 +181,12 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
     cJSON_Delete(json); return valid;
 }
 
-bool usage_daily_total(const usage_record_t *records, unsigned count, int day,
-                       uint64_t *total, unsigned *coverage)
+bool usage_display_update(usage_record_t *current,const usage_record_t *incoming)
 {
-    *total=0;*coverage=0;
-    for(unsigned i=0;i<count;++i) {
-        const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_day==day && r->daily_tokens>=0) {
-            *total+=(uint64_t)r->daily_tokens; ++*coverage;
-        }
-    }
-    return *coverage>0;
-}
-
-bool usage_weekly_total(const usage_record_t *records, unsigned count, int day,
-                        uint64_t *total, unsigned *coverage)
-{
-    int week=usage_week_start(day);
-    *total=0;*coverage=0;
-    if(!week)return false;
-    for(unsigned i=0;i<count;++i) {
-        const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_week==week && r->weekly_tokens>=0) {
-            uint64_t value=(uint64_t)r->weekly_tokens;
-            if(value>UINT64_MAX-*total){*total=0;*coverage=0;return false;}
-            *total+=value;++*coverage;
-        }
-    }
-    return *coverage>0;
-}
-
-bool usage_monthly_total(const usage_record_t *records,unsigned count,int day,uint64_t *total,unsigned *coverage)
-{
-    int month=usage_month_start(day);*total=0;*coverage=0;if(!month)return false;
-    for(unsigned i=0;i<count;++i){const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_month==month && r->monthly_tokens>=0){
-            uint64_t value=(uint64_t)r->monthly_tokens;if(value>UINT64_MAX-*total){*total=0;*coverage=0;return false;}
-            *total+=value;++*coverage;
-        }
-    }
-    return *coverage>0;
+    if(!current || !incoming)return false;
+    if(incoming->fetched_at<current->fetched_at)return true;
+    *current=*incoming;
+    return true;
 }
 
 static bool money(const cJSON *item, double *out)

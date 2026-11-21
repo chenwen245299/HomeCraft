@@ -41,24 +41,26 @@ int main(void)
     r->token_week=20261026;r->weekly_tokens=10000000;
     r->token_month=20261001;r->monthly_tokens=1320000000;
     int64_t values[3];
-    usage_summary_totals(providers,PROVIDER_COUNT,NULL,20261028,values);
-    assert(values[0]==1000000 && values[1]==10000000 && values[2]==1320000000);
-    usage_summary_totals(providers,PROVIDER_COUNT,&hub,20261028,values);
+    usage_summary_totals(NULL,20261028,values);
+    assert(values[0]==-1 && values[1]==-1 && values[2]==-1);
+    usage_totals_t absent={0};usage_summary_totals(&absent,20261028,values);
+    assert(values[0]==-1 && values[1]==-1 && values[2]==-1);
+    usage_summary_totals(&hub,20261028,values);
     assert(values[0]==20200000 && values[1]==105400000 && values[2]==2760000000LL);
     // A new day keeps same-week/month hub totals but never yesterday's daily count.
-    usage_summary_totals(providers,PROVIDER_COUNT,&hub,20261029,values);
+    usage_summary_totals(&hub,20261029,values);
     assert(values[0]==-1 && values[1]==105400000 && values[2]==2760000000LL);
     usage_totals_t previous=hub;
     previous.periods[0]=20261025;previous.periods[1]=20261019;
-    usage_summary_totals(providers,PROVIDER_COUNT,&previous,20261028,values);
+    usage_summary_totals(&previous,20261028,values);
     assert(values[0]==-1 && values[1]==-1 && values[2]==2760000000LL);
-    usage_summary_totals(providers,PROVIDER_COUNT,&hub,20261102,values);
+    usage_summary_totals(&hub,20261102,values);
     assert(values[0]==-1 && values[1]==-1 && values[2]==-1);
     assert(usage_totals_decode("{\"v\":1,\"op\":\"totals\",\"d\":[20261028,-1],\"wt\":[20261026,0],\"mt\":[20261001,9007199254740991]}",&hub));
-    usage_summary_totals(providers,PROVIDER_COUNT,&hub,20261028,values);
+    usage_summary_totals(&hub,20261028,values);
     assert(values[0]==-1 && values[1]==0 && values[2]==9007199254740991LL);
     assert(usage_totals_decode("{\"v\":1,\"op\":\"totals\",\"d\":[20250101,0],\"wt\":[20241230,0],\"mt\":[20250101,0]}",&hub));
-    usage_summary_totals(providers,PROVIDER_COUNT,&hub,20250101,values);
+    usage_summary_totals(&hub,20250101,values);
     assert(values[0]==0 && values[1]==0 && values[2]==0);
-    puts("Hub totals: multi-account precedence, unknown/zero, invalid packets, legacy fallback and calendar rollover passed.");
+    puts("Hub totals: multi-account precedence, unknown/zero, invalid packets, no provider fallback and calendar rollover passed.");
 }

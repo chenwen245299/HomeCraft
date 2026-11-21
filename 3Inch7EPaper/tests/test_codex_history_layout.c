@@ -38,8 +38,8 @@ int main(void){
   if(h==4)r->yesterday_day=usage_previous_day(r->yesterday_day);
   for(unsigned i=1;i<count;++i){usage_record_t *a=&s.network.providers[i+2];*a=*r;strcpy(a->name,i==1?"Argus":"DeepSeek Harness");a->windows[0].remaining_tenths=a->windows[1].remaining_tenths=-1;a->token_day=day;a->daily_tokens=0;}
   if(stale){s.network.ble_link=false;r->fetched_at=now-7200;r->status=USAGE_NETWORK_ERROR;}
-  bool portrait=rotation%180;unsigned selected[3];assert(usage_overview_select(s.network.providers,PROVIDER_COUNT,day,now,selected,3)==count);unsigned slot=0;while(selected[slot]!=0)++slot;
-  width=portrait?440:(760-12*((int)count-1))/(int)count;height=portrait?(504-12*((int)count-1))/(int)count:260;left=portrait?20:20+(int)slot*(width+12);top=portrait?72+(int)slot*(height+12):64;bar_y=top+height-(height<210?18:21);
+  bool portrait=rotation%180;unsigned selected[3];assert(usage_overview_select(selected,3)==3 && selected[0]==PROVIDER_CODEX);
+  width=portrait?440:(760-24)/3;height=portrait?(504-24)/3:260;left=20;top=portrait?72:64;bar_y=top+height-(height<210?18:21);
   primary_center=top+(height<210?74:(height>=360?140:(height<250?90:96)));
   uint8_t pixels[SCREEN_BYTES];canvas_t c={.pixels=pixels,.rotation=rotation};box_count=segments_count=0;primary_font=primary_right=0;dashboard_render(&c,&s);
   if(segments_count!=10 || box_count<7 || !primary_font){fprintf(stderr,"Codex missing rotation=%u count=%u quota=%d reset=%u font=%d boxes=%u segments=%u center=%d\n",rotation,count,remaining[q],reset,primary_font,box_count,segments_count,primary_center);for(unsigned b=0;b<box_count;++b)fprintf(stderr,"%s (%d,%d..%d,%d)\n",boxes[b].s,boxes[b].x,boxes[b].y,boxes[b].r,boxes[b].b);abort();}
@@ -48,5 +48,5 @@ int main(void){
   ++cases;
  }
  }
- printf("Codex history: %u layouts, fixed primary size/right edge, countdown boundaries, yesterday token/quota, 1-3 cards and four directions; progress bar retained.\n",cases);
+ printf("Codex history: %u layouts, fixed primary size/right edge, countdown boundaries, yesterday token/quota, 1-3 available services in three fixed cards and four directions; progress bar retained.\n",cases);
 }

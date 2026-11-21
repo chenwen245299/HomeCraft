@@ -78,13 +78,19 @@ def main():
         (backup / 'dashboard.bin').write_bytes(dashboard)
         previous_app = read(0x10000, 0x300000)
         (backup / 'application.bin').write_bytes(previous_app)
-        print('Target identity, partition layout and private backups verified; writing app at 0x10000 only.', flush=True)
+        require(previous_app[0] == 0xE9 and struct.unpack_from('<I', previous_app, 32)[0] == 0xABCD5432,
+                'Current application descriptor is invalid; no write allowed')
+        require(previous_app[80:112].split(b'\0')[0] == b'epaper_codex_dashboard',
+                'Current application belongs to another project; no write allowed')
+        previous_version = previous_app[48:80].split(b'\0')[0].decode('ascii')
+        print(f'Target identity, partition layout and private backups verified; upgrading {previous_version} to {version} at 0x10000 only.', flush=True)
         cmds.write_flash(esp, [(0x10000, image)], no_progress=True)
         cmds.verify_flash(esp, [(0x10000, image)])
         require(read(0, 0x10000) == prefix, 'Bootloader/partition table/system NVS changed; not rebooting')
         require(read(0x310000, 0x50000) == dashboard, 'Dashboard NVS changed; not rebooting')
         record = {
             'date_utc': datetime.now(timezone.utc).isoformat(), 'version': version,
+            'previous_version': previous_version,
             'image': str(image_path.relative_to(board)), 'bytes': len(image),
             'sha256': hashlib.sha256(image).hexdigest(), 'app_only_offset': '0x10000',
             'flash_bytes_verified': True, 'pre_app_region_byte_identical': True,

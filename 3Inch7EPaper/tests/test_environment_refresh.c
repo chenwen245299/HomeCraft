@@ -104,10 +104,14 @@ int main(void)
         int day=(local.tm_year+1900)*10000+(local.tm_mon+1)*100+local.tm_mday;
         updated.network.providers[PROVIDER_CODEX].token_week=usage_week_start(day);
         updated.network.providers[PROVIDER_CODEX].weekly_tokens=123456789;
+        updated.network.hub_totals=(usage_totals_t){.received=true,
+            .periods={day,usage_week_start(day),usage_month_start(day)},.tokens={-1,123456789,-1}};
         expect_partial(&overview,&updated,rotation);++cases;
         updated=overview;
         updated.network.providers[PROVIDER_CODEX].token_month=usage_month_start(day);
         updated.network.providers[PROVIDER_CODEX].monthly_tokens=230000000;
+        updated.network.hub_totals=(usage_totals_t){.received=true,
+            .periods={day,usage_week_start(day),usage_month_start(day)},.tokens={-1,-1,230000000}};
         expect_partial(&overview,&updated,rotation);++cases;
 
         canvas_t canvas = {.pixels = before, .rotation = rotation};

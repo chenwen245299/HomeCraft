@@ -2,6 +2,7 @@
 #include "ble_enrollment.h"
 #include "ble_recovery.h"
 #include "ble_transport_probe.h"
+#include "ble_advertising.h"
 #include "energy_policy.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
@@ -90,8 +91,6 @@ static unsigned wifi_interfaces;
 extern const char setup_html_start[] asm("_binary_settings_page_html_start");
 extern const char setup_html_end[] asm("_binary_settings_page_html_end");
 
-static bool harness_dirty;
-static uint64_t harness_save_retry;
 static uint64_t now_ms(void) { return esp_timer_get_time() / 1000; }
 static void take(void) { xSemaphoreTake(lock, portMAX_DELAY); }
 static void give(void) { xSemaphoreGive(lock); }
@@ -106,28 +105,10 @@ static esp_err_t persist(const device_config_t *cfg)
     return err == ESP_OK ? nvs_commit(storage) : err;
 }
 
-static int harness_calendar_day(void)
-{
-    time_t now=time(NULL);struct tm local;localtime_r(&now,&local);
-    return (local.tm_year+1900)*10000+(local.tm_mon+1)*100+local.tm_mday;
-}
-static void save_harness(bool force)
-{
-    take();
-    if(harness_dirty && (force || now_ms()>=harness_save_retry)) {
-        esp_err_t err=nvs_set_blob(storage,"harness_stats",&state.harness,sizeof(state.harness));
-        if(err==ESP_OK)err=nvs_commit(storage);
-        if(err==ESP_OK){harness_dirty=false;harness_save_retry=now_ms()+HARNESS_SAVE_MS;}
-        else {harness_save_retry=now_ms()+60000;ESP_LOGW(TAG,"Harness cache persistence failed: %s",esp_err_to_name(err));}
-    }
-    give();
-}
-
 void network_get_snapshot(network_snapshot_t *out)
 {
     if (!lock) { memset(out, 0, sizeof(*out)); return; }
     take(); *out = state; give();
-    if(out->harness.count)harness_stats_total(&out->harness,harness_calendar_day(),&out->providers[PROVIDER_EXTRA1]);
 }
 void network_get_ble_status(network_ble_status_t *out)
 {
@@ -228,7 +209,7 @@ static esp_err_t data_handler(uint32_t session, const uint8_t *input, ssize_t le
         char reply[481];
         bool encoded=true;
         if(command.operation==DEVICE_HARNESS) {
-            take();encoded=harness_stats_encode(&state.harness,command.value,reply);give();
+            snprintf(reply,sizeof(reply),"{\"ok\":false,\"error\":\"unsupported\"}");
         } else if(command.operation==DEVICE_STATUS || command.operation==DEVICE_HISTORY) {
             device_snapshot_t snapshot; environment_history_t history;
             take();snapshot=device_snapshot;history=device_history;give();
@@ -275,25 +256,19 @@ static esp_err_t data_handler(uint32_t session, const uint8_t *input, ssize_t le
         if (!usage_packet_decode(text,&provider,&record)) return ESP_ERR_INVALID_ARG;
         take();
         usage_record_t *current = &state.providers[provider];
-        bool harness=provider==PROVIDER_EXTRA1 && !strcmp(record.name,"DeepSeek Harness");
-        if(harness) {
-            bool changed;
-            if(!harness_stats_update(&state.harness,&record,&changed)){give();return ESP_ERR_INVALID_ARG;}
-            harness_dirty|=changed;
-            harness_stats_total(&state.harness,record.token_day,current);
-            state.ble_received_at=record.fetched_at;state.ble_link=true;state.data_pairing_open=false;++state.revision;
-        } else if (!harness && (!current->has_data || record.fetched_at >= current->fetched_at)) {
-            if (record.status == USAGE_OK || record.status == USAGE_NOT_CONFIGURED) {
-                *current = record;
-                if(provider==PROVIDER_ARGUS && !usage_breakdown_matches(&state.argus_breakdown,current))
-                    memset(&state.argus_breakdown,0,sizeof(state.argus_breakdown));
-            }
-            else { current->status=record.status; current->configured=record.configured; }
-            if (record.fetched_at>state.ble_received_at) state.ble_received_at=record.fetched_at;
-            state.ble_link=true;
-            state.data_pairing_open=false; ++state.revision;
+        if(usage_display_update(current,&record)) {
+            if(provider==PROVIDER_ARGUS && !usage_breakdown_matches(&state.argus_breakdown,current))
+                memset(&state.argus_breakdown,0,sizeof(state.argus_breakdown));
+            if(record.fetched_at>state.ble_received_at)state.ble_received_at=record.fetched_at;
+            state.ble_link=true;state.data_pairing_open=false;++state.revision;
         }
-        if (!data_paired && nvs_set_u8(storage,"ble_paired",1)==ESP_OK && nvs_commit(storage)==ESP_OK) data_paired=true;
+        if (!data_paired && nvs_set_u8(storage,"ble_paired",1)==ESP_OK && nvs_commit(storage)==ESP_OK) {
+            data_paired=true;
+            // A first binding may complete without restarting the data service.
+            // Its live connection needs no advertising; the next disconnect
+            // must already use the fixed low-power interval.
+            ble_advertising_configure(true);
+        }
         give();
         int64_t current_time=time(NULL), target=usage_clock_target(current_time,record.fetched_at);
         if(target!=current_time) {
@@ -308,7 +283,7 @@ static esp_err_t data_handler(uint32_t session, const uint8_t *input, ssize_t le
         ok=true;
     }
     take(); unsigned sequence=data_refresh_sequence; give();
-    char reply[336]; int n=snprintf(reply,sizeof(reply),"{\"ok\":%s,\"refresh\":%u,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"max_providers\":8,\"device_control\":1,\"argus_breakdown\":1,\"sample_refresh\":1,\"harness_devices\":1,\"harness_aggregate\":1,\"totals\":1}",ok?"true":"false",sequence);
+    char reply[336]; int n=snprintf(reply,sizeof(reply),"{\"ok\":%s,\"refresh\":%u,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"max_providers\":8,\"device_control\":1,\"argus_breakdown\":1,\"sample_refresh\":1,\"harness_aggregate\":1,\"display_snapshots\":1,\"totals\":1}",ok?"true":"false",sequence);
     if(n<0 || (size_t)n>=sizeof(reply))return ESP_ERR_INVALID_SIZE;
     *output=(uint8_t *)strdup(reply); if (!*output) return ESP_ERR_NO_MEM;
     *output_len=n; return ESP_OK;
@@ -410,6 +385,7 @@ static esp_err_t close_ble(void)
         if(err!=ESP_OK)return err;
         ble_initialized = false;
     }
+    ble_advertising_configure(false);
     free((void *)ble_security.salt); free((void *)ble_security.verifier);
     memset(&ble_security, 0, sizeof(ble_security));
     take(); state.ble_active = false; memset(state.ble_pop, 0, sizeof(state.ble_pop));
@@ -425,6 +401,7 @@ static esp_err_t close_ble(void)
 
 static esp_err_t open_ble(bool data_mode, bool enrolling)
 {
+    ble_advertising_configure(data_mode && !enrolling && data_paired);
     network_prov_scheme_ble_set_service_uuid(enrolling?enrollment_service_uuid:data_service_uuid);
     network_prov_mgr_config_t cfg = {.scheme = network_prov_scheme_ble,
         .scheme_event_handler = NETWORK_PROV_EVENT_HANDLER_NONE,
@@ -912,9 +889,7 @@ static void network_task(void *unused)
     ble_recovery_t recovery={0};uint64_t next_ble_probe=0;
     const unsigned minimum[] = {60, 300, 300};
     for (;;) {
-        save_harness(false);
         if (xEventGroupGetBits(shutdown_events) & STOP_REQUEST) {
-            save_harness(true);
             esp_err_t ble_result=close_ble(), web_result=ESP_OK;
             if(server){web_result=httpd_stop(server);if(web_result==ESP_OK)server=NULL;}
             esp_err_t wifi_result=esp_wifi_stop();
@@ -1051,16 +1026,8 @@ esp_err_t network_start(void)
     if (err != ESP_OK) return err;
     err = nvs_open_from_partition("dashboard", "settings", NVS_READWRITE, &storage);
     if (err != ESP_OK) return err;
-    size_t harness_size=0;bool harness_restored=false;
-    if(nvs_get_blob(storage,"harness_stats",NULL,&harness_size)==ESP_OK && harness_size<=sizeof(state.harness)) {
-        void *blob=malloc(harness_size);
-        if(blob){
-            harness_restored=nvs_get_blob(storage,"harness_stats",blob,&harness_size)==ESP_OK && harness_stats_restore(blob,harness_size,&state.harness);
-            if(harness_restored && harness_size!=sizeof(state.harness))harness_dirty=true;
-            free(blob);
-        }
-    }
-    if(!harness_restored){memset(&state.harness,0,sizeof(state.harness));state.harness.version=2;}
+    // The retired harness_stats NVS key is intentionally left untouched. It is
+    // never loaded, merged, exported or used to replace a hub-provided result.
     size_t key_size=sizeof(data_key); if (nvs_get_str(storage,"ble_key",data_key,&key_size)!=ESP_OK) data_key[0]=0;
     uint8_t paired=0; nvs_get_u8(storage,"ble_paired",&paired); data_paired=paired==1;
     size_t size = sizeof(*settings);

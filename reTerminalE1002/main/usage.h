@@ -27,7 +27,6 @@ typedef struct {
     int yesterday_day, yesterday_week_used_tenths;
     int64_t yesterday_tokens;
     char name[25]; // Optional ASCII profile label; built-in account names cannot be replaced.
-    char source_id[17], source_name[25]; // Local-install identity; never account credentials.
     bool usage_available, daily_cost_available;
     int64_t input_tokens, output_tokens, cached_tokens, calls, missing_cost_calls;
     double daily_cost_usd;
@@ -47,9 +46,6 @@ int64_t usage_clock_target(int64_t current, int64_t fetched_at);
 int usage_week_start(int day); // YYYYMMDD -> Monday, or 0 for an invalid date.
 int usage_month_start(int day);
 int usage_previous_day(int day);
-bool usage_daily_total(const usage_record_t *records, unsigned count, int day,
-                       uint64_t *total, unsigned *coverage);
-bool usage_weekly_total(const usage_record_t *records, unsigned count, int day,
-                        uint64_t *total, unsigned *coverage);
-bool usage_monthly_total(const usage_record_t *records, unsigned count, int day,
-                         uint64_t *total, unsigned *coverage);
+// Replace the displayed result with the hub's complete snapshot, including explicit unknowns.
+// Out-of-order transport packets are acknowledged without changing the newer display.
+bool usage_display_update(usage_record_t *current, const usage_record_t *incoming);

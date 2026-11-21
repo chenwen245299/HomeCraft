@@ -85,14 +85,10 @@ static void token_card(color_canvas_t *c,int x,int w,const dashboard_state_t *s,
  num(b,sizeof(b),r->token_week==usage_week_start(day)?r->weekly_tokens:-1);row(c,x,w,ROW2_Y,"本周",b,&bold24,-4,INK_BLACK);
  num(b,sizeof(b),r->token_month==usage_month_start(day)?r->monthly_tokens:-1);row(c,x,w,ROW3_Y,"本月",b,&bold24,-4,INK_BLACK);
 }
-// HomeCraft's totals count every verified Codex account; the packets here carry only one, so adding them
-// is the fallback for a hub without totals:1 or a period it has not sent yet.
+// The display copies matching hub periods; it never derives totals from provider packets.
 void dashboard_totals(const dashboard_state_t *s,int day,int64_t out[3]){
- int periods[]={day,usage_week_start(day),usage_month_start(day)};uint64_t values[3];unsigned count;bool have[3];
- have[0]=usage_daily_total(s->usage,PROVIDER_COUNT,day,&values[0],&count);
- have[1]=usage_weekly_total(s->usage,PROVIDER_COUNT,day,&values[1],&count);
- have[2]=usage_monthly_total(s->usage,PROVIDER_COUNT,day,&values[2],&count);
- for(int i=0;i<3;++i)out[i]=s->hub_totals&&periods[i]&&s->hub_periods[i]==periods[i]?s->hub_tokens[i]:have[i]&&values[i]<=INT64_MAX?(int64_t)values[i]:-1;
+ int periods[]={day,usage_week_start(day),usage_month_start(day)};
+ for(int i=0;i<3;++i)out[i]=s->hub_totals&&periods[i]&&s->hub_periods[i]==periods[i]?s->hub_tokens[i]:-1;
 }
 static void totals(color_canvas_t *c,const dashboard_state_t *s,int day){
  static const char *labels[]={"今日合计","本周合计","本月合计"};int64_t values[3];char b[24];dashboard_totals(s,day,values);

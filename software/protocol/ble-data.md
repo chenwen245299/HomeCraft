@@ -178,8 +178,10 @@ NimBLE连接枚举在本机IDF6.1源码核实后封装于ble_transport_probe.c�
 可选yd:[YYYYMMDD,tokens,week_used_permille]只允许provider0，能力yesterday_usage:true独立协商，缺项可为-1。真实日期、Token JS安全整数、周已用0–1000或未知，重复／未知字段仍拒绝。旧固件不收到yd。派生yd不写入共享v1/v2摘要；原官方w快照保持供本机同账号历史匹配。Security2／480字节／NVS绑定不变。板端新增EPAPER_YESTERDAY仅输出日期与数字，验证见codex-yesterday-0233-validation.json。
 
 
-## 2026-11-18 Harness 调用去重与 aggregate 接收
+## 2026-11-18 最终结果直显
 
-Harness 对话跨机同步后，前文逐 Mac 相加只作为旧版协议历史。HomeCraft 按调用身份取并集并只给 `harness_aggregate:1` 显示端发送不含 `o` 的 profile 4；不支持者跳过 Harness 包。`d/wt/mt/u` 仍沿用原字段和 480 字节边界；缺今日时可发 `[当日,-1]` 且不带 `u`，缺周/月字段保持未知。App 内保留未知/错误原因，下发时规范为无数字的 `s:0` 撤下合计，兼容早期 aggregate 固件的错误缓存策略；接收端不能回退求和旧来源。`totals:1` 与首页共用去重结果。
+AI 用量采集、去重、汇总和跨机更新仅在 Mac App 完成。屏幕只接收最终 profile 数字和 `totals:1`，整体替换最后的显示快照，不保存各 Mac 来源、不将屏幕作为同步中转或统计来源。profile 不含 `o`；两款接收端均拒绝机器来源扩展。
 
-3Inch7EPaper 的 aggregate 缓存使用同尺寸 v3 单快照，保留原 NVS 键及配置/绑定；v1/v2 缓存可读取但不参与当前消费合计。收到 aggregate 后忽略旧 Mac 原来源包，保存最新时间水位以免陈旧成功值复活已清除的冲突值；相同数字只更新时间、不为每次读取写 Flash。`op:harness` 对 v3 返回空 sources，防止派生合计回流。字段定义在 `device-v1.json`；源码/离线检查通过不等于已刷机。
+`display_snapshots:1` 声明严格直显：总览仅复制 App 发来的匹配周期值，即使第一次连接前也不按各 provider 回退求和。未知字段/失败快照替换旧值，日期不匹配显示未知；不把缺值补成 0 或留作旧数。`harness_aggregate:1` 沿用为 profile 4 最终数值接收能力，统计不在板上执行。
+
+小屏移除 `harness_stats` 模块及 NVS 读取/写入，旧键原样保留但不再参与显示。`op:harness` 已退役，返回不支持；Mac 已删除该命令调用和缓存回流。当前 App 对缺少 `display_snapshots:1` 的旧固件明确提示结果直显未支持，不静默将跳过的 Harness 专页算作全部更新完成。页面编号和 480 字节边界不变，绑定、认证与硬件刷新策略不变。

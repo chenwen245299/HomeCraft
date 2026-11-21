@@ -54,6 +54,7 @@ int main(void)
         usage_record_t *r=&s.network.providers[0];r->configured=r->has_data=true;r->status=USAGE_OK;r->fetched_at=now;
         r->windows[0]=(quota_window_t){1000,300,now+8000};r->windows[1]=(quota_window_t){1000,10080,now+86400};
         r->token_day=day;r->daily_tokens=totals[n];r->token_week=usage_week_start(day);r->weekly_tokens=totals[n];r->token_month=usage_month_start(day);r->monthly_tokens=totals[n];
+        s.network.hub_totals=(usage_totals_t){.received=true,.periods={day,r->token_week,r->token_month},.tokens={totals[n],totals[n],totals[n]}};
         if(mode==1){r->daily_tokens=-1;r->token_week=20241230;r->token_month=20250101;}
         if(mode==2){s.sensor_valid=false;s.network.ble_link=false;}
         if(mode==3){s.temperature=130;s.humidity=0;}
@@ -78,6 +79,7 @@ int main(void)
         usage_record_t *r=&s.network.providers[0];r->configured=r->has_data=true;r->status=USAGE_OK;r->fetched_at=now;
         r->token_day=day;r->daily_tokens=20200000;r->token_week=usage_week_start(day);r->weekly_tokens=105400000;
         r->token_month=usage_month_start(day);r->monthly_tokens=2760000000LL;
+        s.network.hub_totals=(usage_totals_t){.received=true,.periods={day,r->token_week,r->token_month},.tokens={r->daily_tokens,r->weekly_tokens,r->monthly_tokens}};
         uint8_t pixels[SCREEN_BYTES];canvas_t c={.pixels=pixels,.rotation=rotation};
         count=reading_count=unit_count=0;dashboard_render(&c,&s);
         text_box_t expected[32];unsigned expected_count=count;memcpy(expected,boxes,sizeof(expected));

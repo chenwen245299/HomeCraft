@@ -1156,6 +1156,15 @@ impl Home {
                 }
             }
             if r.packet.p == crate::harness::PROVIDER {
+                for device in state.fleet.values().filter(|d| d.connected) {
+                    if let Some(notice) = &device.usage_notice {
+                        ui.label(
+                            RichText::new(format!("{} · {notice}", device.name))
+                                .size(12.)
+                                .color(t.error),
+                        );
+                    }
+                }
                 harness_view::show(ui, r, t, &mut self.harness_scope);
                 return;
             }

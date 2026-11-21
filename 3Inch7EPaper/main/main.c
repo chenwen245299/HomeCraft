@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_pm.h"
 #include "energy_policy.h"
+#include "ble_advertising.h"
 #include "esp_sleep.h"
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
@@ -108,13 +109,16 @@ static void usb_input_task(void *unused)
                     printf("EPAPER_ENERGY cpu_min=%d cpu_max=%d auto_sleep=%d sleep_count=%llu slept_us=%llu wifi_running=%d sensor_ms=%u imu_ms=%u\n",pm.min_freq_mhz,pm.max_freq_mhz,pm.light_sleep_enable,(unsigned long long)count,(unsigned long long)us,n.wifi_running,ENV_SAMPLE_MS,IMU_SAMPLE_MS);
                     uint64_t telemetry,history;energy_work_counters(&telemetry,&history);
                     printf("EPAPER_WORK uptime_ms=%llu telemetry=%llu history=%llu\n",(unsigned long long)(esp_timer_get_time()/1000),(unsigned long long)telemetry,(unsigned long long)history);
+                    ble_advertising_status_t adv;ble_advertising_get_status(&adv);
+                    printf("EPAPER_BLE_ADV low_power=%d configured_ms=%u starts=%u error=%d\n",
+                        adv.low_power,adv.configured_ms,adv.starts,adv.last_error);
                 } else if (!overflow && strcmp(line,"EPAPER_IMU_MODE")==0) {
                     uint8_t ctrl2=0,ctrl7=0;esp_err_t err=board_read_imu_config(&ctrl2,&ctrl7);
                     printf("EPAPER_IMU_MODE valid=%d ctrl2=0x%02x ctrl7=0x%02x\n",err==ESP_OK,ctrl2,ctrl7);
                 } else if (!overflow && strcmp(line,"EPAPER_HARNESS_STATS")==0) {
                     network_snapshot_t n;network_get_snapshot(&n);
                     const usage_record_t *r=&n.providers[PROVIDER_EXTRA1];
-                    printf("EPAPER_HARNESS_STATS devices=%u day=%d daily=%lld week=%d weekly=%lld valid=%d\n",(unsigned)n.harness.count,r->token_day,(long long)r->daily_tokens,r->token_week,(long long)r->weekly_tokens,harness_stats_valid(&n.harness));
+                    printf("EPAPER_HARNESS_STATS status=%u day=%d daily=%lld week=%d weekly=%lld\n",r->status,r->token_day,(long long)r->daily_tokens,r->token_week,(long long)r->weekly_tokens);
                 } else if (!overflow && strcmp(line,"EPAPER_ARGUS_STATS")==0) {
                     network_snapshot_t n;network_get_snapshot(&n);
                     const usage_breakdown_t *b=&n.argus_breakdown;
@@ -608,9 +612,12 @@ void app_main(void)
                     if(!power_only && state.page==PAGE_OVERVIEW){
                         time_t at=time(NULL);struct tm local;localtime_r(&at,&local);
                         int day=(local.tm_year+1900)*10000+(local.tm_mon+1)*100+local.tm_mday;int64_t totals[3];
-                        usage_summary_totals(state.network.providers,PROVIDER_COUNT,&state.network.hub_totals,day,totals);
+                        usage_summary_totals(&state.network.hub_totals,day,totals);
                         printf("EPAPER_TOTALS_FRAME frame=%u day=%d daily=%lld weekly=%lld monthly=%lld hub=%d\n",
                             confirmed_frame.sequence,day,(long long)totals[0],(long long)totals[1],(long long)totals[2],state.network.hub_totals.received);
+                        unsigned cards[3];unsigned count=usage_overview_select(cards,3);
+                        printf("EPAPER_OVERVIEW_FRAME frame=%u cards=%u services=%u,%u,%u\n",
+                            confirmed_frame.sequence,count,cards[0],cards[1],cards[2]);
                     }
                     if(power_only)printf("EPAPER_POWER_DISPLAY usb=%d percent=%d elapsed_ms=%llu\n",state.power.usb_present,state.power.percent,
                         (unsigned long long)(telemetry.power_event_ms?(uint64_t)last_power_draw/1000-telemetry.power_event_ms:0));

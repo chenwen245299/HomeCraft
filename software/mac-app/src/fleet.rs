@@ -11,6 +11,7 @@ pub struct Status {
     pub paused: bool,
     pub synced: Option<i64>,
     pub notice: String,
+    pub usage_notice: Option<String>,
     /// Latest reported temperature, humidity and sample time.
     pub climate: Option<(f32, f32, i64)>,
 }
@@ -207,6 +208,7 @@ async fn run(
                 let revision =
                     serde_json::to_vec(&readings.iter().map(|r| &r.packet).collect::<Vec<_>>())?;
                 if !readings.is_empty() && last_sync.as_ref() != Some(&revision) {
+                    let usage_notice = l.usage_notice().map(str::to_owned);
                     for r in &readings {
                         let effective = crate::harness::effective(r, &harness);
                         l.send_reading(&effective).await?;
@@ -216,6 +218,9 @@ async fn run(
                     events.update(|s| {
                         if let Some(row) = s.fleet.get_mut(&id) {
                             row.synced = synced.or(Some(usage::now()));
+                            row.usage_notice = usage_notice.clone();
+                            row.notice =
+                                usage_notice.clone().unwrap_or_else(|| "已安全连接".into());
                         }
                     });
                 }

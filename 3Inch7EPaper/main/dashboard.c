@@ -322,7 +322,7 @@ static void token_summary(canvas_t *c,const dashboard_state_t *s,int y,int width
 {
     bool portrait=canvas_width(c)<canvas_height(c);
     int64_t values[3];bool known[3];int day=calendar_day();
-    usage_summary_totals(s->network.providers,PROVIDER_COUNT,&s->network.hub_totals,day,values);
+    usage_summary_totals(&s->network.hub_totals,day,values);
     for(unsigned i=0;i<3;++i)known[i]=values[i]>=0;
     int cell_width=portrait?width:width/3,cell_height=portrait?height/3:height;
     int room=cell_width-(portrait?84:24);int widths[]={room,room,room};
@@ -485,9 +485,9 @@ static void codex_overview_body(canvas_t *c,const usage_record_t *r,int x,int y,
 static void usage_overview(canvas_t *c, const dashboard_state_t *s)
 {
     bool portrait=canvas_width(c)<canvas_height(c);
-    unsigned selected[3];unsigned count=usage_overview_select(s->network.providers,PROVIDER_COUNT,calendar_day(),time(NULL),selected,3);
-    int card_width=portrait?440:(count?(760-12*((int)count-1))/(int)count:760);
-    int card_height=portrait?(count?(504-12*((int)count-1))/(int)count:504):260;
+    unsigned selected[3];unsigned count=usage_overview_select(selected,3);
+    int card_width=portrait?440:(760-12*((int)count-1))/(int)count;
+    int card_height=portrait?(504-12*((int)count-1))/(int)count:260;
     const bitmap_font_t *title_options[]={&font_bold28,&font_bold24,&font_bold20,&font_bold16,&font_bold12};
     const bitmap_font_t *title_font=&font_bold12;
     for(unsigned f=0;f<sizeof(title_options)/sizeof(title_options[0]);++f){
@@ -498,109 +498,28 @@ static void usage_overview(canvas_t *c, const dashboard_state_t *s)
         }
         if(fits){title_font=title_options[f];break;}
     }
-    if(!count) {
-        canvas_round_box(c,20,portrait?72:64,portrait?440:760,portrait?504:260,14,2);
-        canvas_text(c,44,portrait?160:130,"等待已启用服务的数据",&font28,1,true);
-        canvas_text(c,44,portrait?210:180,"请在 Mac 助手连接设备并同步",&font20,1,true);
-    }
+    int day=calendar_day();
     for(unsigned slot=0;slot<count;++slot) {
         unsigned i=selected[slot];const usage_record_t *r=&s->network.providers[i];
         int x=portrait?20:20+slot*(card_width+12),y=portrait?72+slot*(card_height+12):64;
         canvas_round_box(c,x,y,card_width,card_height,14,2);
-        const char *name=usage_record_name(i,r);
+        const char *name=i==PROVIDER_EXTRA1?"DeepSeek Harness":usage_record_name(i,r);
         brand_title(c,i,name,x+12,y+33,44,card_width-84,title_font,true);
-        if(r->status!=USAGE_OK || !record_fresh(s,r))
-            canvas_text(c,x+66,y+(i==4?60:(i==PROVIDER_CODEX?44:52)),record_status(s,r),&font16,1,true);
-        bool quota=r->windows[0].remaining_tenths>=0 || r->windows[1].remaining_tenths>=0;
+        bool period=r->has_data && ((r->token_day==day && r->daily_tokens>=0) ||
+            (r->token_week==usage_week_start(day) && r->weekly_tokens>=0) ||
+            (r->token_month==usage_month_start(day) && r->monthly_tokens>=0));
+        const char *status=!r->configured?"等待同步":
+            (r->status==USAGE_OK && i!=PROVIDER_CODEX && !period?"暂无数据":record_status(s,r));
+        if(r->status!=USAGE_OK || !record_fresh(s,r) || (i!=PROVIDER_CODEX && !period))
+            canvas_text(c,x+66,y+(i==4?(portrait?48:56):(i==PROVIDER_CODEX?44:48)),status,&font16,1,true);
         if(i==PROVIDER_CODEX){
             codex_overview_body(c,r,x,y,card_width,card_height);
-        }else if(quota && count==1 && !portrait) {
-            int half=card_width/2;
-            canvas_text(c,x+16,y+118,"5小时",&font32,1,true);
-            quota_value(c,x+half-24,y+140,half-130,r->windows[0].remaining_tenths,r->has_data,&digits96);
-            canvas_fill(c,x+half,y+72,1,148,true);
-            canvas_text(c,x+half+24,y+121,"周额度",&font28,1,true);
-            quota_value(c,x+card_width-20,y+140,half-140,r->windows[1].remaining_tenths,r->has_data,&digits64);
-            char reset[64];
-            if (i == PROVIDER_CODEX) reset_countdown(c,x+16,y+196,half-40,&r->windows[0],r->has_data,false);
-            else {reset_label(reset,sizeof(reset),r->windows[0].reset_at);canvas_text(c,x+16,y+196,reset,&font20,1,true);}
-            reset_label(reset,sizeof(reset),r->windows[1].reset_at);canvas_text(c,x+half+24,y+196,reset,&font20,1,true);
-            segments(c,x+16,y+239,card_width-32,12,r->windows[0].remaining_tenths);
-        } else if(quota) {
-            int primary_center=card_height<200?84:112;
-            int weekly_center=card_height<200?138:198;
-            int label_x=x+12,right=x+card_width-12;
-            canvas_text(c,label_x,y+primary_center-22,"5小时",&font32,1,true);
-            quota_value(c,right,y+primary_center,card_width-111,r->windows[0].remaining_tenths,r->has_data,&digits96);
-            if (i == PROVIDER_CODEX)
-                reset_countdown(c,x+16,y+(card_height<200?102:146),
-                                card_height<200?180:card_width-32,&r->windows[0],r->has_data,card_height<200);
-            canvas_text(c,x+16,y+weekly_center-17,"周额度",&font24,1,true);
-            quota_value(c,right,y+weekly_center,card_width-114,r->windows[1].remaining_tenths,r->has_data,card_height<200?&digits40:(card_width>300?&digits64:&digits48));
-            if(card_height>=240)segments(c,x+16,y+card_height-21,card_width-32,12,r->has_data?r->windows[0].remaining_tenths:-1);
-        } else if((r->token_day==calendar_day() && r->daily_tokens>=0) || (r->token_week==usage_week_start(calendar_day()) && r->weekly_tokens>=0) || (r->token_month==usage_month_start(calendar_day()) && r->monthly_tokens>=0)) {
+        } else {
             daily_usage_body(c,r,x,y,card_width,card_height,false);
-        } else if(r->balance_available) {
-            char text[64];snprintf(text,sizeof(text),"%.2f",r->balance);
-            const bitmap_font_t *font=card_height<210?&digits64:&digits80;
-            if(canvas_text_width(text,font,1)>card_width-32){
-                char amount[32];token_format_compact(amount,sizeof(amount),(uint64_t)llround(fabs(r->balance)));
-                snprintf(text,sizeof(text),"%s%s",r->balance<0?"-":"",amount);font=&digits64;
-            }
-            if(canvas_text_width(text,font,1)>card_width-32)font=&digits40;
-            if(canvas_text_width(text,font,1)>card_width-32)font=&font_bold32;
-            canvas_text(c,x+16,y+62,"API 余额",&font28,1,true);
-            canvas_text(c,x+card_width-16-canvas_text_width(text,font,1),y+(card_height<210?80:100),text,font,1,true);
-            canvas_text(c,x+16,y+card_height-43,r->currency,&font24,1,true);
         }
     }
     token_summary(c,s,portrait?588:340,portrait?278:548,portrait?174:88);
     compact_environment(c,s,portrait?310:580,portrait?588:340,portrait?150:200,portrait?174:88);
-}
-
-static void harness_page(canvas_t *c,const dashboard_state_t *s)
-{
-    const usage_record_t *r=&s->network.providers[PROVIDER_EXTRA1];
-    bool portrait=canvas_width(c)<canvas_height(c);int width=canvas_width(c)-48,top=92,day=calendar_day();
-    int height=portrait?220:130;canvas_round_box(c,24,top,width,height,12,2);
-    const char *labels[]={"今日","本周","本月"};
-    int64_t totals[]={r->daily_tokens,r->weekly_tokens,r->monthly_tokens};
-    bool known[]={r->token_day==day && r->daily_tokens>=0,r->token_week==usage_week_start(day) && r->weekly_tokens>=0,
-        r->token_month==usage_month_start(day) && r->monthly_tokens>=0};
-    int room=portrait?width-110:width/3-32;int rooms[]={room,room,room};
-    unsigned preferred[]={digits64.height,digits64.height,digits64.height};token_number_layout_t numbers[3];
-    token_triple_layout(totals,known,rooms,preferred,numbers);
-    for(unsigned i=0;i<3;++i){
-        int x=portrait?24:24+(int)i*(width/3),y=portrait?top+(int)i*(height/3):top;
-        if(i){if(portrait)canvas_fill(c,36,y,width-24,1,true);else canvas_fill(c,x,y+12,1,height-24,true);}
-        int center=portrait?y+height/6:y+82;
-        int ink_top,ink_bottom;canvas_text_ink_bounds(labels[i],&font20,&ink_top,&ink_bottom);
-        canvas_text(c,x+16,portrait?center-(ink_top+ink_bottom)/2:y+12,labels[i],&font20,1,true);
-        token_number_draw(c,portrait?24+width-16:x+width/3-16,center,&numbers[i]);
-    }
-    unsigned count=s->network.harness.count;int y=top+(portrait?238:149);
-    int name_room=portrait?124:316,first=32+name_room,col=(canvas_width(c)-32-first)/3;
-    const bitmap_font_t *heading=count<=4?&font20:&font16;
-    canvas_text(c,32,y,s->network.harness.version==3?"统计":"设备",heading,1,true);
-    for(unsigned i=0;i<3;++i)canvas_text(c,first+(int)i*col+(col-canvas_text_width(labels[i],heading,1))/2,y,labels[i],heading,1,true);
-    y+=count<=4?36:28;int row=count?(canvas_height(c)-48-y)/(int)count:40;if(row>100)row=100;
-    const bitmap_font_t *name_font=row>=65?&font_bold28:(row>=40?&font_bold24:(row>=28?&font_bold20:&font_bold16));
-    unsigned number_height=row>=65?48:(row>=48?40:(row>=36?32:24));
-    for(unsigned i=0;i<count;++i){
-        const harness_device_t *d=&s->network.harness.devices[i];int center=y+row/2;
-        char name[26];snprintf(name,sizeof(name),"%s",d->name);const bitmap_font_t *fitted=name_font;
-        if(canvas_text_width(name,fitted,1)>name_room-10)fitted=&font_bold24;
-        if(canvas_text_width(name,fitted,1)>name_room-10)fitted=&font_bold20;
-        while(strlen(name)>3 && canvas_text_width(name,fitted,1)>name_room-10)name[strlen(name)-1]=0;
-        canvas_text(c,32,center-(int)fitted->height/2,name,fitted,1,true);
-        int64_t values[]={d->daily,d->weekly,d->monthly};
-        bool available[]={d->day==day,d->week==usage_week_start(day),d->month==usage_month_start(day) && d->monthly>=0};
-        int widths[]={col-10,col-10,col-10};unsigned sizes[]={number_height,number_height,number_height};token_number_layout_t row_numbers[3];
-        token_triple_layout(values,available,widths,sizes,row_numbers);
-        for(unsigned j=0;j<3;++j)token_number_draw(c,first+(int)(j+1)*col-5,center,&row_numbers[j]);
-        y+=row;
-    }
-    canvas_text(c,24,canvas_height(c)-28,portrait?"已同步统计 · BOOT 翻页":"已同步统计 · BOOT 翻页 / 双击同步",&font20,1,true);
 }
 
 static void provider_page(canvas_t *c, const dashboard_state_t *s, unsigned provider)
@@ -611,7 +530,6 @@ static void provider_page(canvas_t *c, const dashboard_state_t *s, unsigned prov
     if(provider==PROVIDER_ARGUS) {
         argus_page_render(c,s);return;
     }
-    if(provider==PROVIDER_EXTRA1 && s->network.harness.version==3 && s->network.harness.count) {harness_page(c,s);return;}
     if(provider>PROVIDER_ARGUS) {
         int height=portrait?580:300;
         canvas_round_box(c,24,100,canvas_width(c)-48,height,12,2);
@@ -884,7 +802,7 @@ void dashboard_render(canvas_t *c, const dashboard_state_t *s)
                    portrait ? 432 : 364, card_height, &s->quota.secondary, s->has_quota, true, NULL, false);
         if (page == PAGE_OVERVIEW) environment_strip(c, s, portrait ? 548 : 314, portrait ? 144 : 104);
     }
-    if((provider==PROVIDER_ARGUS || (provider==PROVIDER_EXTRA1 && s->network.harness.version==3 && s->network.harness.count)) && s->network.started) {footer_page(c,s,page);return;}
+    if(provider==PROVIDER_ARGUS && s->network.started) {footer_page(c,s,page);return;}
     if(page==PAGE_OVERVIEW && s->network.started) {
         const char *hint=portrait?"BOOT 翻页 · 双击同步":"BOOT 翻页 / 双击同步    PWR 上一页 / 双击旋转";
         canvas_text(c,20,height-28,hint,&font20,1,true);

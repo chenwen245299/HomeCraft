@@ -50,8 +50,7 @@ bool app_accept_usage(const char *json){usage_record_t record;provider_id_t prov
  if(old->has_data&&record.fetched_at<old->fetched_at){give();return true;}
  if(record.has_data&&!old->has_data)initial_data=true;
  if(provider==0&&record.has_data&&record.windows[0].remaining_tenths>=0&&record.windows[0].remaining_tenths<=200&&old->windows[0].remaining_tenths>200)urgent=true;
- if(record.configured&&!record.has_data&&old->has_data){old->status=record.status;}
- else *old=record;
+ if(!usage_display_update(old,&record)){give();return false;}
  dirty=true;requested_at=esp_timer_get_time()/1000;give();return true;}
 static bool integer(const cJSON *v,int64_t low,int64_t high,int64_t *out){if(!cJSON_IsNumber(v)||!isfinite(v->valuedouble)||floor(v->valuedouble)!=v->valuedouble||v->valuedouble<low||v->valuedouble>high)return false;*out=(int64_t)v->valuedouble;return true;}
 static bool weather_decode(const cJSON *obj,weather_t *w){

@@ -8,7 +8,6 @@
 #define INPUT_POLL_MS 10U
 #define DASHBOARD_POLL_MS 100U
 #define NETWORK_POLL_MS 1000U
-#define HARNESS_SAVE_MS 300000U
 #define CPU_MAX_MHZ 80
 #define CPU_MIN_MHZ 40
 void energy_start(void);

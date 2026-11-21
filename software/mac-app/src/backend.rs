@@ -485,13 +485,24 @@ async fn pair_bluetooth(
     let _ = p.disconnect().await;
     result
 }
+fn display_usage_notice(snapshots: bool, totals: bool, harness: bool) -> Option<&'static str> {
+    if !snapshots {
+        Some("固件需更新：尚未支持仅显示 App 最终结果")
+    } else if !totals {
+        Some("固件需更新：尚不能直接显示 App 总览合计")
+    } else if !harness {
+        Some("固件需更新：Harness 详情尚未同步，App 合计正常")
+    } else {
+        None
+    }
+}
+
 struct Link {
     peripheral: Peripheral,
     data: Characteristic,
     cipher: Cipher,
     daily_supported: bool,
     profiles_supported: bool,
-    harness_supported: bool,
     weekly_supported: bool,
     monthly_supported: bool,
     yesterday_supported: bool,
@@ -504,6 +515,7 @@ struct Link {
     weather_slots: usize,
     forecast_supported: bool,
     harness_aggregate_supported: bool,
+    snapshots_supported: bool,
     todo_supported: bool,
     poem_supported: bool,
     totals_supported: bool,
@@ -539,7 +551,6 @@ impl Link {
                     cipher,
                     daily_supported: false,
                     profiles_supported: false,
-                    harness_supported: false,
                     weekly_supported: false,
                     monthly_supported: false,
                     yesterday_supported: false,
@@ -551,6 +562,7 @@ impl Link {
                     weather_slots: 0,
                     forecast_supported: false,
                     harness_aggregate_supported: false,
+                    snapshots_supported: false,
                     todo_supported: false,
                     poem_supported: false,
                     totals_supported: false,
@@ -584,7 +596,6 @@ impl Link {
         if v.get("daily").is_some() {
             self.daily_supported = v["daily"] == true;
             self.profiles_supported = v["profiles"] == true;
-            self.harness_supported = v["harness_devices"] == 1;
             self.weekly_supported = v["weekly_tokens"] == true;
             self.monthly_supported = v["monthly_tokens"] == true;
             self.yesterday_supported = v["yesterday_usage"] == true;
@@ -596,6 +607,7 @@ impl Link {
             self.weather_slots = v["weather"].as_u64().map_or(0, |n| n.min(2) as usize);
             self.forecast_supported = v["forecast"] == 1;
             self.harness_aggregate_supported = v["harness_aggregate"] == 1;
+            self.snapshots_supported = v["display_snapshots"] == 1;
             self.todo_supported = v["todo"] == 1;
             self.poem_supported = v["poem"] == 1;
             self.totals_supported = v["totals"] == 1;
@@ -664,46 +676,12 @@ impl Link {
         )?)
         .await
     }
-    async fn harness_devices(&mut self) -> Result<Vec<crate::harness::DeviceUsage>> {
-        ensure!(self.harness_supported, "设备尚不支持多 Mac 汇总");
-        let mut rows = Vec::new();
-        let mut count = None;
-        for offset in 0..8 {
-            let v = self
-                .exchange_json(&serde_json::to_vec(
-                    &serde_json::json!({"v":1,"op":"harness","offset":offset}),
-                )?)
-                .await?;
-            let n = v["count"]
-                .as_u64()
-                .filter(|n| *n <= 8)
-                .ok_or_else(|| anyhow::anyhow!("Harness 设备数量无效"))?;
-            ensure!(
-                count.is_none_or(|c| c == n) && v["v"] == 1 && v["offset"] == offset,
-                "Harness 汇总分块不一致"
-            );
-            count = Some(n);
-            let batch: Vec<crate::harness::DeviceUsage> =
-                serde_json::from_value(v["devices"].clone())?;
-            ensure!(
-                batch.len() == usize::from((offset as u64) < n),
-                "Harness 汇总分块缺失"
-            );
-            for row in batch {
-                ensure!(
-                    row.valid()
-                        && !rows
-                            .iter()
-                            .any(|d: &crate::harness::DeviceUsage| d.id == row.id),
-                    "Harness 设备快照无效"
-                );
-                rows.push(row);
-            }
-            if rows.len() as u64 == n {
-                return Ok(rows);
-            }
-        }
-        anyhow::bail!("Harness 汇总不完整")
+    fn usage_notice(&self) -> Option<&'static str> {
+        display_usage_notice(
+            self.snapshots_supported,
+            self.totals_supported,
+            self.harness_aggregate_supported,
+        )
     }
     async fn send_reading(&mut self, reading: &usage::Reading) -> Result<u64> {
         let mut sequence = 0;
@@ -891,7 +869,6 @@ pub async fn worker(
     let mut last_ping = Instant::now();
     let mut last_device = Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
     let mut last_history = Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
-    let mut last_harness = Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
     let mut sequence = None;
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     let mut initial = true;
@@ -1494,6 +1471,7 @@ pub async fn worker(
                         let _ = config::remember_device(&directory, &d.name, &d.id);
                         active_id = Some(d.id.clone());
                         let supported = l.device_supported;
+                        let usage_notice = l.usage_notice().map(str::to_owned);
                         let (rotation_supported, history_supported) =
                             (l.rotation_supported, l.history_supported);
                         let telemetry = if supported {
@@ -1510,8 +1488,6 @@ pub async fn worker(
                             Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
                         last_history =
                             Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
-                        last_harness =
-                            Instant::now() - Duration::from_secs(crate::device::TELEMETRY_SECONDS);
                         events.update(|s| {
                             s.connected = true;
                             s.active_device = d.id.clone();
@@ -1526,7 +1502,10 @@ pub async fn worker(
                                         .and_then(|p| p.model.clone())
                                         .unwrap_or_else(|| "3Inch7EPaper".into()),
                                     connected: true,
-                                    notice: "已安全连接".into(),
+                                    notice: usage_notice
+                                        .clone()
+                                        .unwrap_or_else(|| "已安全连接".into()),
+                                    usage_notice: usage_notice.clone(),
                                     ..Default::default()
                                 },
                             );
@@ -1536,7 +1515,9 @@ pub async fn worker(
                             s.history_supported = history_supported;
                             s.telemetry = telemetry;
                             s.history = None;
-                            s.device_notice = if supported {
+                            s.device_notice = if let Some(notice) = &usage_notice {
+                                notice.clone()
+                            } else if supported {
                                 "温湿度每 30 秒采样，每 5 分钟回传。".into()
                             } else {
                                 "当前固件仅支持用量同步；更新后可查看温湿度和切换屏幕。".into()
@@ -1812,34 +1793,6 @@ pub async fn worker(
                         sequence = Some(l.send_reading(&effective).await?);
                         sent = true;
                     }
-                    if l.harness_supported
-                        && (manual_usage
-                            || last_harness.elapsed()
-                                >= Duration::from_secs(crate::device::TELEMETRY_SECONDS))
-                    {
-                        last_harness = Instant::now();
-                        match l.harness_devices().await {
-                            Ok(devices) => {
-                                let cached = events
-                                    .state
-                                    .lock()
-                                    .map(|s| s.harness_devices.clone())
-                                    .unwrap_or_default();
-                                let merged = crate::harness::merge_devices(&cached, &devices);
-                                // Legacy totals are observation-only: they cannot be restored as
-                                // independent consumption once Harness conversations synchronize.
-                                events.update(|s| {
-                                    s.harness_devices = merged;
-                                    if crate::harness::save_devices(&root, &s.harness_devices)
-                                        .is_err()
-                                    {
-                                        s.device_notice = "电脑统计缓存未保存".into();
-                                    }
-                                });
-                            }
-                            Err(_) => events.log("多 Mac 用量暂未取回，将在下次同步重试。"),
-                        }
-                    }
                     needs_sync = false;
                     last_ping = Instant::now();
                     if sent {
@@ -1986,5 +1939,29 @@ mod enrollment_endpoint_tests {
             )
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod display_contract_tests {
+    use super::*;
+    #[test]
+    fn unsupported_firmware_is_reported_as_incomplete_display_sync() {
+        assert!(
+            display_usage_notice(false, true, true)
+                .unwrap()
+                .contains("仅显示 App 最终结果")
+        );
+        assert!(
+            display_usage_notice(true, false, false)
+                .unwrap()
+                .contains("固件需更新")
+        );
+        assert!(
+            display_usage_notice(true, true, false)
+                .unwrap()
+                .contains("详情尚未同步")
+        );
+        assert!(display_usage_notice(true, true, true).is_none());
     }
 }

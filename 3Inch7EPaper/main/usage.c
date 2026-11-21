@@ -103,7 +103,7 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
     if (!text || strlen(text) > 480) return false;
     cJSON *json = cJSON_ParseWithOpts(text, NULL, true);
     bool valid = cJSON_IsObject(json);
-    const char *keys[] = {"v", "p", "t", "s", "w", "b", "c", "mu", "ml", "d", "ld", "n", "u", "dc", "wt", "o", "mt", "yd"};
+    const char *keys[] = {"v", "p", "t", "s", "w", "b", "c", "mu", "ml", "d", "ld", "n", "u", "dc", "wt", "mt", "yd"};
     const unsigned key_count=sizeof(keys)/sizeof(keys[0]);
     unsigned seen = 0;
     for (const cJSON *item = valid ? json->child : NULL; item; item = item->next) {
@@ -198,14 +198,6 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
             if(valid) strcpy(fresh.name,name->valuestring);
         }
         if(valid && p>=3 && !name) valid=false;
-        const cJSON *origin=field(json,"o");
-        if(valid && origin) {
-            const cJSON *id=cJSON_GetObjectItemCaseSensitive(origin,"id"),*label=cJSON_GetObjectItemCaseSensitive(origin,"name");
-            valid=p==PROVIDER_EXTRA1 && !strcmp(fresh.name,"DeepSeek Harness") && cJSON_IsObject(origin) && cJSON_GetArraySize(origin)==2 && cJSON_IsString(id) && cJSON_IsString(label) && strlen(id->valuestring)==16 && label->valuestring[0] && strlen(label->valuestring)<=24;
-            if(valid)for(const char *s=id->valuestring;*s;++s)if(!strchr("0123456789abcdef",*s)){valid=false;break;}
-            if(valid)for(const char *s=label->valuestring;*s;++s)if(!((*s>='A'&&*s<='Z')||(*s>='a'&&*s<='z')||(*s>='0'&&*s<='9')||strchr(" ._-",*s))){valid=false;break;}
-            if(valid){strcpy(fresh.source_id,id->valuestring);strcpy(fresh.source_name,label->valuestring);}
-        }
         const cJSON *usage=field(json,"u");
         if(valid && usage) {
             int64_t values[5];
@@ -223,62 +215,20 @@ bool usage_packet_decode(const char *text, provider_id_t *provider, usage_record
     cJSON_Delete(json); return valid;
 }
 
-bool usage_daily_total(const usage_record_t *records, unsigned count, int day,
-                       uint64_t *total, unsigned *coverage)
+bool usage_display_update(usage_record_t *current,const usage_record_t *incoming)
 {
-    *total=0;*coverage=0;
-    for(unsigned i=0;i<count;++i) {
-        const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_day==day && r->daily_tokens>=0) {
-            *total+=(uint64_t)r->daily_tokens; ++*coverage;
-        }
-    }
-    return *coverage>0;
+    if(!current || !incoming)return false;
+    if(incoming->fetched_at<current->fetched_at)return true;
+    *current=*incoming;
+    return true;
 }
 
-bool usage_weekly_total(const usage_record_t *records, unsigned count, int day,
-                        uint64_t *total, unsigned *coverage)
-{
-    int week=usage_week_start(day);
-    *total=0;*coverage=0;
-    if(!week)return false;
-    for(unsigned i=0;i<count;++i) {
-        const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_week==week && r->weekly_tokens>=0) {
-            uint64_t value=(uint64_t)r->weekly_tokens;
-            if(value>UINT64_MAX-*total){*total=0;*coverage=0;return false;}
-            *total+=value;++*coverage;
-        }
-    }
-    return *coverage>0;
-}
-
-bool usage_monthly_total(const usage_record_t *records,unsigned count,int day,uint64_t *total,unsigned *coverage)
-{
-    int month=usage_month_start(day);*total=0;*coverage=0;if(!month)return false;
-    for(unsigned i=0;i<count;++i){const usage_record_t *r=&records[i];
-        if(r->has_data && r->token_month==month && r->monthly_tokens>=0){
-            uint64_t value=(uint64_t)r->monthly_tokens;if(value>UINT64_MAX-*total){*total=0;*coverage=0;return false;}
-            *total+=value;++*coverage;
-        }
-    }
-    return *coverage>0;
-}
-
-void usage_summary_totals(const usage_record_t *records,unsigned count,
-                          const usage_totals_t *hub,int day,int64_t out[3])
+void usage_summary_totals(const usage_totals_t *hub,int day,int64_t out[3])
 {
     int periods[]={day,usage_week_start(day),usage_month_start(day)};
-    uint64_t values[3];unsigned coverage;bool known[3];
-    known[0]=usage_daily_total(records,count,day,&values[0],&coverage);
-    known[1]=usage_weekly_total(records,count,day,&values[1],&coverage);
-    known[2]=usage_monthly_total(records,count,day,&values[2],&coverage);
     for(unsigned i=0;i<3;++i)
-        // Once connected to a totals-capable hub, never silently switch back to a
-        // single Mac's provider packets at rollover. Wait for the new hub period.
-        out[i]=hub && hub->received
-            ? periods[i] && hub->periods[i]==periods[i] ? hub->tokens[i] : -1
-            : known[i] && values[i]<=INT64_MAX ? (int64_t)values[i] : -1;
+        out[i]=hub && hub->received && periods[i] && hub->periods[i]==periods[i]
+            ? hub->tokens[i] : -1;
 }
 
 static bool money(const cJSON *item, double *out)
@@ -409,37 +359,14 @@ const char *usage_record_name(provider_id_t p,const usage_record_t *r)
     return p>=3 && r->name[0]?r->name:usage_provider_name(p);
 }
 
-static int overview_score(const usage_record_t *r,unsigned p,int day,int64_t now)
+unsigned usage_overview_select(unsigned *out,unsigned capacity)
 {
-    if(!r->configured || (!r->has_data && p>=3)) return -1;
-    int64_t age=now-r->fetched_at;
-    if(age>86400 || age<0) return -1;
-    bool daily=r->has_data && r->token_day==day && r->daily_tokens>=0;
-    bool quota=r->has_data && r->windows[0].remaining_tenths>=0;
-    bool balance=r->has_data && r->balance_available;
-    bool period=r->has_data && ((r->token_week==usage_week_start(day) && r->weekly_tokens>=0) || (r->token_month==usage_month_start(day) && r->monthly_tokens>=0));
-    bool yesterday=r->has_data && p==PROVIDER_CODEX && r->yesterday_day==usage_previous_day(day) &&
-        (r->yesterday_tokens>=0 || r->yesterday_week_used_tenths>=0);
-    if(!daily && !quota && !balance && !period && !yesterday) return -1;
-    int score=quota?6000:(daily && r->daily_tokens>0?5000:(balance?3000:1000));
-    if(quota && r->windows[0].remaining_tenths<=200) score=20000+1000-r->windows[0].remaining_tenths;
-    if(daily && r->daily_tokens>0) score+=500;
-    if(r->status!=USAGE_OK || age>900) score-=25000;
-    return score;
-}
-
-unsigned usage_overview_select(const usage_record_t *r,unsigned count,int day,int64_t now,unsigned *out,unsigned capacity)
-{
+    static const unsigned services[]={PROVIDER_CODEX,PROVIDER_ARGUS,PROVIDER_EXTRA1};
+    if(!out)return 0;
     unsigned used=0;
-    for(unsigned p=0;p<count;++p) {
-        int score=overview_score(&r[p],p,day,now);
-        if(score==-1) continue;
-        unsigned pos=0;
-        while(pos<used && overview_score(&r[out[pos]],out[pos],day,now)>=score) ++pos;
-        if(pos>=capacity) continue;
-        if(used<capacity) ++used;
-        for(unsigned j=used-1;j>pos;--j) out[j]=out[j-1];
-        out[pos]=p;
+    while(used<capacity && used<sizeof(services)/sizeof(services[0])){
+        out[used]=services[used];
+        ++used;
     }
     return used;
 }

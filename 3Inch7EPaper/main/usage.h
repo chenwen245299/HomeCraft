@@ -27,7 +27,6 @@ typedef struct {
     int yesterday_day, yesterday_week_used_tenths;
     int64_t yesterday_tokens;
     char name[25]; // Optional ASCII profile label; built-in account names cannot be replaced.
-    char source_id[17], source_name[25]; // Local-install identity; never account credentials.
     bool usage_available, daily_cost_available;
     int64_t input_tokens, output_tokens, cached_tokens, calls, missing_cost_calls;
     double daily_cost_usd;
@@ -42,15 +41,14 @@ typedef struct {
 } usage_totals_t;
 
 bool usage_totals_decode(const char *json, usage_totals_t *out);
-void usage_summary_totals(const usage_record_t *records, unsigned count,
-                          const usage_totals_t *hub, int day, int64_t out[3]);
+void usage_summary_totals(const usage_totals_t *hub, int day, int64_t out[3]);
 
 void usage_record_init(usage_record_t *record);
 bool usage_decode(provider_id_t provider, const char *json, int64_t now, usage_record_t *out);
 const char *usage_provider_name(provider_id_t provider);
 const char *usage_record_name(provider_id_t provider, const usage_record_t *record);
-unsigned usage_overview_select(const usage_record_t *records, unsigned count, int day,
-                               int64_t now, unsigned *selected, unsigned capacity);
+// Fixed display slots: Codex, Argus, DeepSeek Harness. Data/status never changes the layout.
+unsigned usage_overview_select(unsigned *selected, unsigned capacity);
 const char *usage_status_text(usage_status_t status);
 // Credential-free, compact BLE snapshot. Whitelisted fields only, <= 480 bytes.
 bool usage_packet_decode(const char *json, provider_id_t *provider, usage_record_t *out);
@@ -59,9 +57,6 @@ int64_t usage_clock_target(int64_t current, int64_t fetched_at);
 int usage_week_start(int day); // YYYYMMDD -> Monday, or 0 for an invalid date.
 int usage_month_start(int day);
 int usage_previous_day(int day);
-bool usage_daily_total(const usage_record_t *records, unsigned count, int day,
-                       uint64_t *total, unsigned *coverage);
-bool usage_weekly_total(const usage_record_t *records, unsigned count, int day,
-                        uint64_t *total, unsigned *coverage);
-bool usage_monthly_total(const usage_record_t *records, unsigned count, int day,
-                         uint64_t *total, unsigned *coverage);
+// Replace the displayed result with the hub's complete snapshot, including explicit unknowns.
+// Out-of-order transport packets are acknowledged without changing the newer display.
+bool usage_display_update(usage_record_t *current, const usage_record_t *incoming);

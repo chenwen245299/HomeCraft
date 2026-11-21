@@ -38,7 +38,7 @@ static esp_err_t endpoint(uint32_t session,const uint8_t *in,ssize_t n,uint8_t *
   char data[320];snprintf(data,sizeof(data),"{\"name\":\"%s\",\"username\":\"wifiprov\",\"password\":\"%s\",\"service_uuid\":\"1775244d-6b43-439b-877c-060f2d9bed07\",\"model\":\"reTerminalE1002\"}",device_name,secret);
   int e=reply(data,out,len);memset(data,0,sizeof(data));return e;
  }
- if(n==1&&in[0]=='?')return reply("{\"ok\":true,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"harness_aggregate\":1,\"device_control\":1,\"sample_refresh\":1,\"rotation_control\":0,\"environment_history\":0,\"weather\":2,\"forecast\":1,\"totals\":1,\"places\":1,\"todo\":1,\"poem\":1,\"color\":6,\"model\":\"reTerminalE1002\",\"refresh\":0}",out,len);
+ if(n==1&&in[0]=='?')return reply("{\"ok\":true,\"daily\":true,\"profiles\":true,\"weekly_tokens\":true,\"monthly_tokens\":true,\"yesterday_usage\":true,\"harness_aggregate\":1,\"display_snapshots\":1,\"device_control\":1,\"sample_refresh\":1,\"rotation_control\":0,\"environment_history\":0,\"weather\":2,\"forecast\":1,\"totals\":1,\"places\":1,\"todo\":1,\"poem\":1,\"color\":6,\"model\":\"reTerminalE1002\",\"refresh\":0}",out,len);
  if(strstr(input,"\"op\"")){
   // JSON and operation allowlist are validated in the application, never arbitrary file access.
   extern int app_handle_request(const char *,char *,size_t);

@@ -39,11 +39,11 @@ int main(int argc,char **argv){
   memset(&s.todo[0],0,sizeof(s.todo[0]));for(int i=0;i<TODO_ITEMS;++i)snprintf(s.todo[0].items[s.todo[0].count++],sizeof(s.todo[0].items[0]),"这是一条非常非常长的待办事项%d",i+1);s.todo[0].total=9;
   s.poem=(poem_t){.valid=true,.count=4};snprintf(s.poem.title,sizeof(s.poem.title),"山居秋暝");snprintf(s.poem.author,sizeof(s.poem.author),"唐 · 王维");
   const char *lines[]={"空山新雨后，天气晚来秋。","明月松间照，清泉石上流。","竹喧归浣女，莲动下渔舟。","随意春芳歇，王孙自可留。"};for(int i=0;i<4;++i)snprintf(s.poem.lines[i],sizeof(s.poem.lines[0]),"%s",lines[i]);}
- // HomeCraft's totals win for matching periods (they count every Codex account); a stale period falls back to the packets.
- if(!strcmp(scenario,"overview")){int64_t t[3];dashboard_totals(&s,20261026,t);assert(t[0]==31200000&&t[1]>0&&t[2]>0);
+ // Only HomeCraft supplies totals. Missing or stale periods never sum provider packets.
+ if(!strcmp(scenario,"overview")){int64_t t[3];dashboard_totals(&s,20261026,t);assert(t[0]==-1&&t[1]==-1&&t[2]==-1);
   s.hub_totals=true;s.hub_periods[0]=20261026;s.hub_periods[1]=20261026;s.hub_periods[2]=20261001;s.hub_tokens[0]=5;s.hub_tokens[1]=-1;s.hub_tokens[2]=1323000000;
   dashboard_totals(&s,20261026,t);assert(t[0]==5&&t[1]==-1&&t[2]==1323000000);
-  s.hub_periods[0]=20261025;dashboard_totals(&s,20261026,t);assert(t[0]==31200000);s.hub_periods[0]=20261026;}
+  s.hub_periods[0]=20261025;dashboard_totals(&s,20261026,t);assert(t[0]==-1);s.hub_periods[0]=20261026;}
  // Places from HomeCraft (places:1): this display (here, own sensor) and another display's reading.
  if(!strcmp(scenario,"overview")||!strcmp(scenario,"critical")||!strcmp(scenario,"long")){s.place_count=2;
   s.places[0]=(place_t){.known=true,.temperature_tenths=235,.humidity_tenths=481,.at=s.now-300};snprintf(s.places[0].name,sizeof(s.places[0].name),"书房");

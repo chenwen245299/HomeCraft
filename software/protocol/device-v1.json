@@ -104,7 +104,7 @@
     "harness_aggregate": {
       "capability": "harness_aggregate:1",
       "packet": "Existing profile 4 / DeepSeek Harness packet, without o; d/wt/mt/u contain the hub's deduplicated usage, never one Mac's independent consumption.",
-      "rule": "Replace legacy per-Mac totals with this authoritative snapshot. Never add machine observations to it or export it through op:harness as a machine source. Unavailable aggregates are withdrawn as s:0 without numeric fields (the App retains the original error); missing periods remain unknown across calendar changes. Per-Mac-only displays do not receive Harness usage from new clients.",
+      "rule": "Receive the Mac-resolved profile 4 result without o and replace its displayed snapshot. No source registry, on-device aggregation or source readback. Unavailable aggregates are withdrawn as s:0 without numeric fields; absent periods remain unknown.",
       "account_credentials": false
     },
     "weather": {
@@ -175,7 +175,7 @@
         "wt": "[Monday of that day, tokens or -1]",
         "mt": "[first day of that month, tokens or -1]"
       },
-      "rule": "The today/week/month totals exactly as HomeCraft's home page shows them (every verified Codex account, effective Harness, OK readings only); -1 is unknown, never 0. Sent once per connection and on change. A display shows these for matching periods instead of adding its per-provider packets, which carry one Codex account.",
+      "rule": "The today/week/month totals exactly as HomeCraft resolves them. Display matching periods only; unknown is -1. Missing totals, including before the first receipt, never trigger on-device summation of provider packets.",
       "account_credentials": false
     },
     "places": {
@@ -198,6 +198,12 @@
         "device.mv": "optional battery millivolts measured by the display"
       },
       "rule": "A display may show coarse voltage-based bars; HomeCraft never presents millivolts as a calibrated percentage."
+    },
+    "display_snapshots": {
+      "capability": "display_snapshots:1",
+      "rule": "The Mac owns usage collection, deduplication, aggregation and cross-Mac updates. Displays only replace final numeric snapshots. Never retain per-Mac sources, return sources, accumulate provider usage or fall back to summing when totals are absent. Unknowns replace previous values; unmatched periods display unknown.",
+      "legacy_harness_operation": "op:harness is retired and unsupported; harness_devices is not advertised.",
+      "account_credentials": false
     }
   }
 }
