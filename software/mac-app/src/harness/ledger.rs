@@ -4,7 +4,7 @@ use anyhow::{Result, ensure};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 const MAX_CALLS: usize = 100_000;
 
@@ -64,7 +64,9 @@ impl Call {
 pub struct Ledger {
     pub version: u8,
     pub day: i64,
-    pub calls: Vec<Call>,
+    // Immutable between imports: state and presentation snapshots share the records.
+    // Serde retains the existing JSON array without changing the file schema.
+    pub calls: Arc<Vec<Call>>,
     /// Conflicting equal revisions cannot be resolved by upload time or token magnitude.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub conflict: bool,
@@ -85,7 +87,7 @@ impl Ledger {
         let mut result = Self {
             version: 1,
             day: day_id(day),
-            calls: vec![],
+            calls: Arc::default(),
             conflict: false,
         };
         let start = first(day);
@@ -97,7 +99,7 @@ impl Ledger {
                 ensure!(entries.len() <= MAX_CALLS, "Harness 调用明细过多");
             }
         }
-        result.calls = entries.into_values().collect();
+        result.calls = Arc::new(entries.into_values().collect());
         result.days()?;
         Ok(result)
     }
@@ -105,7 +107,14 @@ impl Ledger {
         if let Some(old) = entries.get_mut(&call.key) {
             let rank = |c: &Call| (c.settled, c.revision);
             if rank(&call) == rank(old) {
-                ensure!(old == &call, "Harness 同一调用存在冲突，等待核对");
+                ensure!(
+                    old.tokens == call.tokens && old.date() == call.date(),
+                    "Harness 同一调用存在冲突，等待核对"
+                );
+                // Synchronized copies can timestamp the same usage differently. The
+                // UTC+8 billing day and counters must agree; use a stable timestamp
+                // so repeated imports converge regardless of source order.
+                old.at = old.at.min(call.at);
             } else if rank(&call) > rank(old) {
                 *old = call;
             }
@@ -132,7 +141,7 @@ impl Ledger {
             "Harness 调用明细冲突或无效，等待核对"
         );
         let mut days = BTreeMap::<NaiveDate, Day>::new();
-        for call in &self.calls {
+        for call in self.calls.iter() {
             days.entry(call.date().unwrap())
                 .or_default()
                 .add(call.day())?;
@@ -231,6 +240,51 @@ mod tests {
         assert_eq!(union.days().unwrap()[&day(20261001)].total(), 70);
     }
     #[test]
+    fn same_day_timestamp_variants_converge_without_counting_copies_twice() {
+        let original = call("shared", 20261021, 0, 100);
+        let mut replayed = original.clone();
+        replayed.at += 95 * 60 * 1000;
+        let mut third = original.clone();
+        third.at += 23_322;
+        let a = Ledger::new(day(20261021), [original.clone()]).unwrap();
+        let b = Ledger::new(day(20261021), [replayed]).unwrap();
+        let c = Ledger::new(day(20261021), [third]).unwrap();
+        let ab = Ledger::union(day(20261021), [&a, &b]).unwrap();
+        let bc = Ledger::union(day(20261021), [&b, &c]).unwrap();
+        assert_eq!(*ab.calls, vec![original]);
+        assert_eq!(ab.days().unwrap()[&day(20261021)].total(), 110);
+        assert_eq!(ab, Ledger::union(day(20261021), [&b, &a, &b]).unwrap());
+        assert_eq!(
+            Ledger::union(day(20261021), [&ab, &c]).unwrap(),
+            Ledger::union(day(20261021), [&a, &bc]).unwrap()
+        );
+        assert_eq!(a.merge(&b).merge(&c), c.merge(&b).merge(&a));
+        assert!(!a.merge(&b).conflict);
+    }
+    #[test]
+    fn equal_revision_counter_or_billing_day_conflicts_remain_unknown() {
+        let original = call("shared", 20261021, 0, 100);
+        for changed in [
+            Call {
+                tokens: [101, 10, 5],
+                ..original.clone()
+            },
+            Call {
+                tokens: [100, 10, 6],
+                ..original.clone()
+            },
+            Call {
+                at: original.at + 24 * 60 * 60 * 1000,
+                ..original.clone()
+            },
+        ] {
+            let a = Ledger::new(day(20261022), [original.clone()]).unwrap();
+            let b = Ledger::new(day(20261022), [changed]).unwrap();
+            assert!(Ledger::union(day(20261022), [&a, &b]).is_err());
+            assert!(a.merge(&b).conflict);
+        }
+    }
+    #[test]
     fn calendar_window_retains_the_previous_month_part_of_this_week() {
         let old = Ledger::new(
             day(20260930),
@@ -262,16 +316,29 @@ mod tests {
         value["prompt"] = serde_json::json!("not allowed");
         assert!(serde_json::from_value::<Ledger>(value).is_err());
         let mut invalid = ledger.clone();
-        invalid.calls.push(invalid.calls[0].clone());
+        let duplicate = invalid.calls[0].clone();
+        Arc::make_mut(&mut invalid.calls).push(duplicate);
         assert!(!invalid.valid());
         let mut invalid = ledger.clone();
         invalid.version = 2;
         assert!(!invalid.valid());
         let mut invalid = ledger.clone();
-        invalid.calls[0].at = i64::MAX;
+        Arc::make_mut(&mut invalid.calls)[0].at = i64::MAX;
         assert!(!invalid.valid());
         let mut value = serde_json::to_value(&ledger).unwrap();
         value["calls"][0]["tokens"][0] = serde_json::json!(-1);
         assert!(serde_json::from_value::<Ledger>(value).is_err());
+    }
+    #[test]
+    fn snapshot_clones_share_records_without_changing_serialization_or_the_original() {
+        let ledger = Ledger::new(day(20261021), [call("shared", 20261021, 0, 100)]).unwrap();
+        let mut copy = ledger.clone();
+        assert!(Arc::ptr_eq(&ledger.calls, &copy.calls));
+        let value = serde_json::to_value(&ledger).unwrap();
+        assert!(value["calls"].is_array());
+        assert_eq!(serde_json::from_value::<Ledger>(value).unwrap(), ledger);
+        Arc::make_mut(&mut copy.calls)[0].tokens[0] = 200;
+        assert_eq!(ledger.calls[0].tokens[0], 100);
+        assert!(!Arc::ptr_eq(&ledger.calls, &copy.calls));
     }
 }

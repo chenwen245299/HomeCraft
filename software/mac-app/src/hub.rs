@@ -29,8 +29,11 @@ pub fn catalog(state: &State) -> cloud::Catalog {
 /// Argus reports the current local library. Each Mac publishes its own original summary once.
 /// Never insert a merged reading here: that would count the same peer again at every exchange.
 pub fn argus_sources(state: &State) -> Vec<(harness::Origin, cloud::Summary)> {
+    argus_sources_in(&catalog(state))
+}
+fn argus_sources_in(catalog: &cloud::Catalog) -> Vec<(harness::Origin, cloud::Summary)> {
     let mut sources = BTreeMap::new();
-    for s in &catalog(state).snapshots {
+    for s in &catalog.snapshots {
         for u in s.usages.iter().filter(|u| u.packet.p == 3) {
             let entry = sources
                 .entry(s.origin.id.clone())
@@ -43,15 +46,14 @@ pub fn argus_sources(state: &State) -> Vec<(harness::Origin, cloud::Summary)> {
     sources.into_values().collect()
 }
 
-fn argus(state: &State) -> Option<Reading> {
+fn argus(catalog: &cloud::Catalog) -> Option<Reading> {
     // These Macs use the same synced library (confirmed by the user). The MCP result is
     // already library-wide: select the newest valid observation, never sum per-Mac copies.
-    let sources = argus_sources(state);
+    let sources = argus_sources_in(catalog);
     let (_, newest) = sources
         .iter()
         .max_by_key(|(origin, s)| (s.packet.t, &origin.id))?;
     let mut r = newest.reading();
-    let catalog = catalog(state);
     let day = crate::home::model::day();
     let latest = |period, select: fn(&usage::Packet) -> Option<[i64; 2]>| {
         catalog
@@ -77,8 +79,15 @@ pub fn readings(state: &State) -> Vec<Reading> {
         return state.readings.clone();
     }
     let catalog = catalog(state);
-    let mut out = cloud::merged_readings(&state.readings, &catalog).0;
-    if let Some(argus) = argus(state) {
+    readings_in(state, &catalog).0
+}
+/// Resolve one captured catalog once, sharing it across provider and source views.
+pub fn readings_in(
+    state: &State,
+    catalog: &cloud::Catalog,
+) -> (Vec<Reading>, Vec<harness::DeviceUsage>) {
+    let mut out = cloud::merged_readings(&state.readings, catalog).0;
+    if let Some(argus) = argus(catalog) {
         if let Some(old) = out.iter_mut().find(|r| r.packet.p == 3) {
             *old = argus;
         } else {
@@ -89,9 +98,11 @@ pub fn readings(state: &State) -> Vec<Reading> {
     if !devices.is_empty() && !out.iter().any(|r| r.packet.p == harness::PROVIDER) {
         out.push(usage::empty(harness::PROVIDER, 0, "已同步的 Harness 记录"));
     }
-    out.into_iter()
+    let readings = out
+        .into_iter()
         .map(|r| harness::effective(&r, &devices))
-        .collect()
+        .collect();
+    (readings, devices)
 }
 
 #[cfg(test)]

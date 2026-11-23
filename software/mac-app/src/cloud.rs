@@ -507,7 +507,9 @@ impl Catalog {
                 .filter(|s| s.packet.p == 4)
                 .filter_map(|s| DeviceUsage::from_reading(&s.reading()))
                 .collect::<Vec<_>>();
-            result = crate::harness::merge_devices(&result, &devices);
+            if !devices.is_empty() {
+                result = crate::harness::merge_devices(&result, &devices);
+            }
         }
         result
     }
@@ -643,9 +645,7 @@ pub fn presentation(mut state: State) -> State {
     }
     state.cloud_data = crate::hub::catalog(&state);
     let (_, sources) = merged_readings(&state.readings, &state.cloud_data);
-    state.readings = crate::hub::readings(&state);
-    state.harness_devices =
-        crate::harness::merge_devices(&state.harness_devices, &state.cloud_data.harness());
+    (state.readings, state.harness_devices) = crate::hub::readings_in(&state, &state.cloud_data);
     state.usage_resolved = true;
     let local = state.cloud.origin.clone();
     state.cloud_sources.extend(
@@ -721,7 +721,13 @@ fn codex_period_total(state: &State, period: i64, scope: u8) -> Option<u64> {
         .iter()
         .flat_map(|s| &s.usages)
         .cloned()
-        .chain(state.readings.iter().filter_map(Summary::from_reading))
+        .chain(
+            state
+                .readings
+                .iter()
+                .filter(|r| r.packet.p == 0)
+                .filter_map(Summary::from_reading),
+        )
         .filter(|s| {
             s.packet.p == 0 && value(&s.packet).is_some_and(|d| d[0] == period && d[1] >= 0)
         })
@@ -1707,6 +1713,9 @@ mod tests {
         let first = crate::harness::test_reading(&a.id, 100);
         let mut second = first.clone();
         second.packet.o = Some(b.clone());
+        // A synchronized log may replay the same billed attempt later that day.
+        std::sync::Arc::make_mut(&mut second.tokens.harness_ledger.as_mut().unwrap().calls)[0]
+            .at += 95 * 60 * 1000;
         let mut x = Catalog::default();
         x.merge(snap(
             &a.id,
@@ -1754,6 +1763,10 @@ mod tests {
             1
         );
         assert_eq!(published.usages[0].packet.o.as_ref().unwrap().id, b.id);
+        assert_eq!(
+            published.usages[0].harness_ledger,
+            second.tokens.harness_ledger
+        );
         fs::copy(
             &path_a,
             path_a.with_file_name(format!("{} (conflict copy).json", a.id)),

@@ -423,7 +423,8 @@ pub async fn render(directory: &Path) -> Result<()> {
                                             (cached - 2_000_000) as u64,
                                         ],
                                     },
-                                ],
+                                ]
+                                .into(),
                             }),
                         };
                     state.harness_devices = vec![
@@ -457,7 +458,10 @@ pub async fn render(directory: &Path) -> Result<()> {
                         conflicting.d[1] += 1;
                         conflicting.wt[1] += 1;
                         conflicting.mt.as_mut().unwrap()[1] += 1;
-                        conflicting.ledger.as_mut().unwrap().calls[0].tokens[0] += 1;
+                        std::sync::Arc::make_mut(
+                            &mut conflicting.ledger.as_mut().unwrap().calls,
+                        )[0]
+                        .tokens[0] += 1;
                         state.harness_devices[1] = conflicting;
                     }
                     state.readings = vec![h];

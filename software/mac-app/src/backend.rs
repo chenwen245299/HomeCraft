@@ -165,6 +165,7 @@ pub type Shared = Arc<Mutex<State>>;
 pub struct Events {
     pub state: Shared,
     pub repaint: eframe::egui::Context,
+    pub view_changed: std::sync::mpsc::SyncSender<()>,
 }
 impl Events {
     fn feedback(&self, message: impl Into<String>, busy: bool, error: bool) {
@@ -174,6 +175,7 @@ impl Events {
         if let Ok(mut s) = self.state.lock() {
             f(&mut s);
         }
+        let _ = self.view_changed.try_send(());
         self.repaint.request_repaint();
     }
     fn log(&self, message: &str) {

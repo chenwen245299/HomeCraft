@@ -22,6 +22,7 @@ mod todo;
 mod ui;
 mod update;
 mod usage;
+mod view_state;
 mod weather;
 
 use std::path::PathBuf;

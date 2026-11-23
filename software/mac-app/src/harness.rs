@@ -197,6 +197,11 @@ pub fn merge_devices(a: &[DeviceUsage], b: &[DeviceUsage]) -> Vec<DeviceUsage> {
     let mut sources = BTreeMap::<String, DeviceUsage>::new();
     for d in a.iter().chain(b).filter(|d| d.valid()) {
         if let Some(old) = sources.get_mut(&d.id) {
+            if old.ledger.is_some() && d.ledger.is_none() {
+                // Legacy totals cannot change an identity-backed observation. In particular,
+                // old daily cloud snapshots must not refold its entire call history.
+                continue;
+            }
             let ledger = match (&old.ledger, &d.ledger) {
                 (Some(a), Some(b)) => Some(a.merge(b)),
                 (a, b) => a.clone().or_else(|| b.clone()),
@@ -1195,7 +1200,7 @@ mod tests {
         conflict.wt[1] += 1;
         conflict.mt.as_mut().unwrap()[1] += 1;
         conflict.u[0] += 1;
-        conflict.ledger.as_mut().unwrap().calls[0].tokens[0] += 1;
+        std::sync::Arc::make_mut(&mut conflict.ledger.as_mut().unwrap().calls)[0].tokens[0] += 1;
         assert!(conflict.valid());
         let r = effective(&local, &[conflict]);
         assert_eq!(r.packet.s, 6);

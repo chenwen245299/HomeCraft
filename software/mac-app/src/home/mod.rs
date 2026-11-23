@@ -1072,8 +1072,9 @@ impl Home {
         state: &State,
         intents: &mut Vec<Intent>,
     ) {
-        let display = crate::harness::effective(r, &state.harness_devices);
-        let r = &display;
+        let display =
+            (!state.usage_resolved).then(|| crate::harness::effective(r, &state.harness_devices));
+        let r = display.as_ref().unwrap_or(r);
         theme::surface(t).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             let name = r.packet.n.as_deref().unwrap_or(match r.packet.p {

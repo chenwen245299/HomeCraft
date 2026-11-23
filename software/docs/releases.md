@@ -2,19 +2,19 @@
 
 源码与公开安装包均使用 [chenwen245299/HomeCraft](https://github.com/chenwen245299/HomeCraft)。当前仓库已经公开，默认 `GITHUB_TOKEN` 即可发布到本仓库，无需额外个人令牌。App 匿名读取公开更新文件，不保存 GitHub 登录凭据。
 
-## 当前发布准备：0.3.3 / build 51（2026-11-21）
+## 当前发布准备：0.3.4 / build 54（2026-11-23）
 
-本地已有 `v0.3.2` 标签，保留不改。本次 **0.3.3 / build 51** 包含 Mac 统一用量汇总、屏幕仅显示最终快照和旧固件能力提示，说明见 [v0.3.3](../release-notes/v0.3.3.md)。小屏配套0.2.42已在本机部署，固定三张卡片及每2秒广播；E1002 0.3.1仍为未部署候选。下方0.3.2与0.3.1为历史步骤记录。
+远程已有 `v0.3.3` 标签，保留不改。本次 **0.3.4 / build 54** 包含 Harness 同日同步副本时间差修复及界面性能修复，说明见 [v0.3.4](../release-notes/v0.3.4.md)。修复已在本机 0.3.3 / build 53 验证；0.3.4 / build 54 的安装包由本次标签触发重新构建，尚未发布或安装。小屏保持0.2.42，本次不改固件。
 
-从工作区根目录执行以下命令；最后推送 `v0.3.3` 才会触发 Release 工作流。该工作流构建并发布 Mac App、ZIP、DMG及更新清单，不编译或刷写屏幕固件。
+由助手先准备好版本、commit 说明和 release note；用户执行下面的简短命令。最后推送 `v0.3.4` 才会触发 Release 工作流，构建并发布 Mac App、ZIP、DMG及更新清单，不编译或刷写屏幕固件。
 
 ```sh
 python3 software/tools/release.py check
 git add -A
-git commit -m "fix: 统一 Mac 用量汇总并稳定小屏服务卡片"
-git tag -a v0.3.3 --cleanup=verbatim -F software/release-notes/v0.3.3.md
+git commit -m "fix: 修复 Harness 同步等待和界面卡顿"
+git tag -a v0.3.4 --cleanup=verbatim -F software/release-notes/v0.3.4.md
 git push origin main
-git push origin v0.3.3
+git push origin v0.3.4
 ```
 
 当前仅准备说明与命令，未执行提交、打标签或推送。
@@ -25,7 +25,7 @@ Harness 同步对话去重修复的发布元数据已更新为 **0.3.2 / build 5
 
 ## 一次发布
 
-下方 0.3.1 命令和文件名为原发布示例；当前发布使用上方 0.3.3 元数据及同名标签。
+下方 0.3.1 命令和文件名为原发布示例；当前发布使用上方 0.3.4 元数据及同名标签。
 
 当前准备版本为 **0.3.1 / build 49**。发布前先提交源码与工作流，再创建并推送版本标签：
 

@@ -38,6 +38,7 @@ struct App {
     background: bool,
     last_login_check: std::time::Instant,
     state: Shared,
+    view: crate::view_state::Cache,
     tx: UnboundedSender<Command>,
     menu_rx: mpsc::Receiver<Action>,
     _tray: TrayIcon,
@@ -96,11 +97,13 @@ impl App {
             places: home::model::Places::from(&home.prefs),
             ..State::default()
         }));
+        let view = crate::view_state::Cache::start(state.clone(), ctx.clone());
         let (tx, rx) = unbounded_channel();
         if !options.preview {
             let events = Events {
                 state: state.clone(),
                 repaint: ctx.clone(),
+                view_changed: view.notifier(),
             };
             let dir = root.clone();
             std::thread::spawn(move || {
@@ -169,6 +172,7 @@ impl App {
             background: options.background,
             last_login_check: std::time::Instant::now(),
             state,
+            view,
             tx,
             menu_rx,
             _tray: tray,
@@ -190,8 +194,8 @@ impl App {
             let _ = self.tx.send(c);
         }
     }
-    fn state(&self) -> State {
-        crate::cloud::presentation(self.state.lock().map(|s| s.clone()).unwrap_or_default())
+    fn state(&self) -> Arc<State> {
+        self.view.snapshot()
     }
     fn intent(&mut self, intent: Intent, ctx: &egui::Context) {
         let starting = match &intent {
@@ -465,6 +469,7 @@ impl App {
                 error,
             ));
         }
+        self.view.invalidate();
         ctx.request_repaint();
     }
     fn control(&mut self, req: control::Request, ctx: &egui::Context) {
