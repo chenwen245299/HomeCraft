@@ -53,6 +53,12 @@ pub async fn render(directory: &Path) -> Result<()> {
             ("harness-bottom", Nav::Usage, Sheet::None, Tab::Overview),
             ("harness-legacy", Nav::Usage, Sheet::None, Tab::Overview),
             ("harness-conflict", Nav::Usage, Sheet::None, Tab::Overview),
+            (
+                "harness-date-disagreement",
+                Nav::Usage,
+                Sheet::None,
+                Tab::Overview,
+            ),
             ("displays", Nav::Displays, Sheet::None, Tab::Overview),
             ("usage", Nav::Usage, Sheet::None, Tab::Overview),
             ("room", Nav::Room, Sheet::None, Tab::Overview),
@@ -406,6 +412,9 @@ pub async fn render(directory: &Path) -> Result<()> {
                                 conflict: false,
                                 calls: vec![
                                     crate::harness::ledger::Call {
+                                        through: None,
+                                        usage_time: false,
+                                        retain_day: None,
                                         key: "1".repeat(64),
                                         at: observed_at,
                                         revision: 1,
@@ -413,6 +422,9 @@ pub async fn render(directory: &Path) -> Result<()> {
                                         tokens: [3_000_000, 0, 2_000_000],
                                     },
                                     crate::harness::ledger::Call {
+                                        through: None,
+                                        usage_time: false,
+                                        retain_day: None,
                                         key: unique.repeat(64),
                                         at: observed_at,
                                         revision: 1,
@@ -448,6 +460,26 @@ pub async fn render(directory: &Path) -> Result<()> {
                     if name == "harness-legacy" {
                         for d in &mut state.harness_devices {
                             d.ledger = None;
+                        }
+                    }
+                    if name == "harness-date-disagreement" {
+                        let previous = today - chrono::Duration::days(1);
+                        let id = |d: chrono::NaiveDate| {
+                            i64::from(d.year()) * 10000
+                                + i64::from(d.month()) * 100
+                                + i64::from(d.day())
+                        };
+                        let peer = &mut state.harness_devices[1];
+                        peer.d[0] = id(previous);
+                        peer.wt[0] = id(previous
+                            - chrono::Duration::days(i64::from(
+                                previous.weekday().num_days_from_monday(),
+                            )));
+                        peer.mt.as_mut().unwrap()[0] = id(previous.with_day(1).unwrap());
+                        let ledger = peer.ledger.as_mut().unwrap();
+                        ledger.day = id(previous);
+                        for call in std::sync::Arc::make_mut(&mut ledger.calls) {
+                            call.at -= 86_400_000;
                         }
                     }
                     if name == "harness-conflict" {

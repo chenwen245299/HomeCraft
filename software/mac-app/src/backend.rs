@@ -164,7 +164,6 @@ pub type Shared = Arc<Mutex<State>>;
 #[derive(Clone)]
 pub struct Events {
     pub state: Shared,
-    pub repaint: eframe::egui::Context,
     pub view_changed: std::sync::mpsc::SyncSender<()>,
 }
 impl Events {
@@ -176,7 +175,7 @@ impl Events {
             f(&mut s);
         }
         let _ = self.view_changed.try_send(());
-        self.repaint.request_repaint();
+        // The view worker requests a repaint after publishing the completed snapshot.
     }
     fn log(&self, message: &str) {
         self.update(|s| {

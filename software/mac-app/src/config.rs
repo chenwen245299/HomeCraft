@@ -217,6 +217,9 @@ impl Drop for Pairing {
 }
 
 pub fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    read_private_bounded(path, 32_768)
+}
+pub fn read_private_bounded<T: serde::de::DeserializeOwned>(path: &Path, limit: u64) -> Result<T> {
     let mut file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW)
@@ -226,9 +229,13 @@ pub fn read_private<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         meta.is_file() && meta.permissions().mode() & 0o077 == 0,
         "私密配置需要权限 600。"
     );
-    ensure!(meta.len() <= 32_768, "配置文件过长。");
+    ensure!(meta.len() <= limit, "配置文件过长。");
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    (&mut file).take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        bytes.zeroize();
+        bail!("配置文件过长。");
+    }
     let parsed = serde_json::from_slice(&bytes).context("配置文件格式错误。");
     bytes.zeroize();
     parsed

@@ -1,4 +1,4 @@
-//! The small AppKit boundary: real window buttons and behind-window material.
+//! The small AppKit boundary: real window buttons and a stable opaque window.
 //! Called only for this app's borrowed eframe window, never other applications.
 use raw_window_handle::HasWindowHandle;
 mod login_item;
@@ -35,7 +35,7 @@ pub fn choose_executable(title: &str) -> Option<std::path::PathBuf> {
     }
 }
 
-/// Updates window chrome without scheduling redraws. Returns whether material is installed.
+/// Updates window chrome without scheduling redraws. Returns whether it is configured.
 pub fn update(window: &impl HasWindowHandle, installed: bool, fullscreen: bool) -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -45,6 +45,19 @@ pub fn update(window: &impl HasWindowHandle, installed: bool, fullscreen: bool) 
     {
         let _ = (window, fullscreen);
         installed
+    }
+}
+
+/// Inspect only our borrowed window for native rendering diagnostics.
+pub fn is_opaque(window: &impl HasWindowHandle) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        imp::is_opaque(window)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        true
     }
 }
 
@@ -79,9 +92,7 @@ pub fn dock_visible() -> bool {
 mod imp {
     use objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSApplication,
-        NSApplicationActivationPolicy, NSAutoresizingMaskOptions, NSColor, NSView,
-        NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
-        NSVisualEffectView, NSWindowButton, NSWindowOrderingMode,
+        NSApplicationActivationPolicy, NSColor, NSView, NSWindowButton,
     };
     use objc2_foundation::{MainThreadMarker, NSPoint};
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -225,7 +236,7 @@ mod imp {
     }
 
     pub fn update(window: &impl HasWindowHandle, installed: bool, fullscreen: bool) -> bool {
-        let Some(main) = MainThreadMarker::new() else {
+        let Some(_main) = MainThreadMarker::new() else {
             return installed;
         };
         let Ok(handle) = window.window_handle() else {
@@ -289,32 +300,39 @@ mod imp {
         if installed {
             return true;
         }
-        // SAFETY: install an autoresizing material behind our content in our window. This is
-        // the standard AppKit NSVisualEffectView; no private selectors or global appearance.
+        // The App paints an opaque wallpaper and its own frosted surfaces. Match the
+        // native window to the GPU surface instead of compositing another animated
+        // NSVisualEffectView behind a transparent Metal layer on every presentation.
+        // SAFETY: configure only the borrowed live window on AppKit's main thread.
         unsafe {
-            let Some(parent) = content.superview() else {
-                return false;
-            };
-            let material = NSVisualEffectView::initWithFrame(main.alloc(), content.frame());
-            material.setMaterial(NSVisualEffectMaterial::Sidebar);
-            material.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-            material.setState(NSVisualEffectState::FollowsWindowActiveState);
-            material.setAutoresizingMask(
-                NSAutoresizingMaskOptions::NSViewWidthSizable
-                    | NSAutoresizingMaskOptions::NSViewHeightSizable,
-            );
-            parent.addSubview_positioned_relativeTo(
-                &material,
-                NSWindowOrderingMode::NSWindowBelow,
-                Some(content),
-            );
-            win.setOpaque(false);
-            win.setBackgroundColor(Some(&NSColor::clearColor()));
+            win.setOpaque(true);
+            win.setBackgroundColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
+                24. / 255.,
+                39. / 255.,
+                48. / 255.,
+                1.,
+            )));
             if let Some(appearance) = NSAppearance::appearanceNamed(NSAppearanceNameDarkAqua) {
                 win.setAppearance(Some(&appearance));
             }
         }
         true
+    }
+    pub fn is_opaque(window: &impl HasWindowHandle) -> bool {
+        if MainThreadMarker::new().is_none() {
+            return false;
+        }
+        let Ok(handle) = window.window_handle() else {
+            return false;
+        };
+        let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+            return false;
+        };
+        // SAFETY: inspect only this borrowed live NSView on the main thread.
+        let content = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+        content
+            .window()
+            .is_some_and(|win| unsafe { win.isOpaque() })
     }
 }
 

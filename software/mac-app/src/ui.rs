@@ -47,6 +47,9 @@ struct App {
     root: PathBuf,
     home: Home,
     material: bool,
+    chrome_geometry: Option<(u32, u32, u64, bool, bool)>,
+    chrome_updates: u64,
+    opaque_window: bool,
     activated: bool,
     control: Option<Control>,
     pending_screenshot: Option<(PathBuf, mpsc::Sender<Value>, std::time::Instant)>,
@@ -102,7 +105,6 @@ impl App {
         if !options.preview {
             let events = Events {
                 state: state.clone(),
-                repaint: ctx.clone(),
                 view_changed: view.notifier(),
             };
             let dir = root.clone();
@@ -181,6 +183,9 @@ impl App {
             root,
             home,
             material: false,
+            chrome_geometry: None,
+            chrome_updates: 0,
+            opaque_window: false,
             activated: false,
             control,
             pending_screenshot: None,
@@ -484,6 +489,8 @@ impl App {
                     v["fleet"] = state.fleet.values().map(|r| json!({"id":r.id,"name":r.name,"model":r.model,"connected":r.connected,"connecting":r.connecting,"paused":r.paused,"synced":r.synced,"notice":r.notice})).collect();
                     v["active_device"] = json!(state.active_device);
                     v["environment_view"] = self.home.environment_inspect();
+                    v["native_chrome_updates"] = json!(self.chrome_updates);
+                    v["native_window_opaque"] = json!(self.opaque_window);
                     v["home_totals"] =
                         crate::home::model::totals_wire(&state, crate::home::model::day())
                             .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -619,7 +626,7 @@ impl eframe::App for App {
         input.events.append(&mut self.pending_input);
     }
     fn clear_color(&self, _: &egui::Visuals) -> [f32; 4] {
-        [0., 0., 0., 0.]
+        [24. / 255., 39. / 255., 48. / 255., 1.]
     }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if !self.activated {
@@ -655,7 +662,24 @@ impl eframe::App for App {
             .and_then(|w| w.is_visible())
             .unwrap_or(true);
         let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-        self.material = epaper_macos::update(frame, self.material, fullscreen);
+        // AppKit may relayout its titlebar after setFrame. Do not move native views
+        // again on every data repaint; only update when the window geometry changes.
+        let geometry = frame.winit_window().map(|w| {
+            let size = w.inner_size();
+            (
+                size.width,
+                size.height,
+                w.scale_factor().to_bits(),
+                fullscreen,
+                self.native_visible,
+            )
+        });
+        if !self.material || geometry != self.chrome_geometry {
+            self.material = epaper_macos::update(frame, self.material, fullscreen);
+            self.chrome_geometry = geometry;
+            self.chrome_updates += 1;
+            self.opaque_window = epaper_macos::is_opaque(frame);
+        }
         while let Ok(action) = self.menu_rx.try_recv() {
             match action {
                 Action::Show => {
@@ -780,7 +804,7 @@ pub fn run(root: PathBuf, options: Options) -> Result<()> {
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
         .with_title_shown(false)
-        .with_transparent(true);
+        .with_transparent(false);
     let native = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Wgpu,

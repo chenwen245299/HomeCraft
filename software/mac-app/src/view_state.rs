@@ -143,7 +143,6 @@ mod tests {
         let cache = Cache::start(raw.clone(), context.clone());
         let events = crate::backend::Events {
             state: raw.clone(),
-            repaint: context,
             view_changed: cache.notifier(),
         };
         events.update(|s| {

@@ -41,6 +41,12 @@ with tempfile.TemporaryDirectory(prefix='homecraft-ui-',dir='/private/tmp') as d
         checks['isolated_no_backend']=True
         request('ui.resize',width=850,height=620)
         wait(lambda s:s['size']==[850.,620.])
+        chrome=wait(lambda s:s['size']==[850.,620.])['native_chrome_updates']
+        for _ in range(10):
+            assert request('state.inspect')['native_chrome_updates']==chrome,'Idle repaints must not relayout the native titlebar'
+        checks['idle_repaints_preserve_native_titlebar']=True
+        assert request('state.inspect')['native_window_opaque'],'Native window must match the opaque GPU presentation'
+        checks['native_window_is_opaque']=True
         home=wait(lambda s:'home.tokens' in s['targets'] and 'home.environment' in s['targets'])
         cards=home['targets'];left=cards['home.tokens'];right=cards['home.environment']
         assert left[1]==right[1] and left[3]==right[3]

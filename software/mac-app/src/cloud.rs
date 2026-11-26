@@ -274,10 +274,20 @@ impl Snapshot {
             .climate()
             .map(|e| e.device.as_str())
             .collect::<std::collections::BTreeSet<_>>();
-        (1..=4).contains(&self.version)
-            && (self.version != 4
+        (1..=6).contains(&self.version)
+            && (!matches!(self.version, 4..=6)
                 || (self.usages.len() == 1
                     && self.usages[0].harness_ledger.is_some()
+                    && (self.version == 6
+                        || (self.version == 5
+                            && self.usages[0]
+                                .harness_ledger
+                                .as_ref()
+                                .is_some_and(|l| l.version <= 2))
+                        || self.usages[0]
+                            .harness_ledger
+                            .as_ref()
+                            .is_some_and(|l| l.version == 1))
                     && self.climate().next().is_none()))
             && self.origin.valid()
             && valid_day(self.day)
@@ -815,15 +825,26 @@ pub(crate) fn atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 fn load(root: &Path) -> Catalog {
-    let value = read_json::<Catalog>(&root.join(".cloud-cache-v3.json"), MAX_HARNESS_CACHE)
+    let current = read_json::<Catalog>(&root.join(".cloud-cache-v5.json"), MAX_HARNESS_CACHE)
+        .or_else(|_| read_json::<Catalog>(&root.join(".cloud-cache-v4.json"), MAX_HARNESS_CACHE));
+    let migrating = current.is_err();
+    let value = current
+        .or_else(|_| read_json::<Catalog>(&root.join(".cloud-cache-v3.json"), MAX_HARNESS_CACHE))
         .or_else(|_| read_json::<Catalog>(&root.join(".cloud-cache-v2.json"), MAX_CACHE))
         .or_else(|_| read_json::<Catalog>(&root.join(".cloud-cache.json"), MAX_CACHE))
         .unwrap_or_default();
     let mut result = Catalog::default();
-    for s in value.snapshots.into_iter().take(MAX_SNAPSHOTS) {
+    for mut s in value.snapshots.into_iter().take(MAX_SNAPSHOTS) {
+        if migrating {
+            s.usages
+                .retain(|u| !u.harness_ledger.as_ref().is_some_and(|l| l.conflict));
+        }
         result.merge(s);
     }
     result
+}
+pub fn cached_harness(root: &Path) -> Vec<DeviceUsage> {
+    load(root).harness()
 }
 pub fn codex_historical_week_used(root: &Path, identity: &Identity, day: i64) -> Option<i64> {
     if !identity.verified || !identity.valid() || !valid_day(day) {
@@ -867,7 +888,18 @@ fn save_cache(root: &Path, catalog: &Catalog) -> bool {
         // Rollbacks retain other providers without reintroducing additive Harness totals.
         s.usages.retain(|u| u.packet.p != 4);
     }
-    if !save(".cloud-cache-v3.json", catalog, MAX_HARNESS_CACHE)
+    let mut previous = catalog.clone();
+    for s in &mut previous.snapshots {
+        s.version = s.version.min(5);
+        for u in &mut s.usages {
+            if let Some(l) = &u.harness_ledger {
+                u.harness_ledger = l.legacy().ok();
+            }
+        }
+    }
+    if !save(".cloud-cache-v5.json", catalog, MAX_HARNESS_CACHE)
+        || !save(".cloud-cache-v4.json", &previous, MAX_HARNESS_CACHE)
+        || !save(".cloud-cache-v3.json", &compatible, MAX_HARNESS_CACHE)
         || !save(".cloud-cache-v2.json", &compatible, MAX_CACHE)
     {
         return false;
@@ -938,6 +970,8 @@ fn exchange(folder: &Path, catalog: &mut Catalog, origin: &Origin) -> Result<usi
         invalid += import(&dir, catalog)?;
     }
     let harness_dir = if usage.join("Harness").exists()
+        || usage.join("Harness-v3").exists()
+        || usage.join("Harness-v2").exists()
         || catalog.snapshots.iter().any(|s| {
             s.origin.id == origin.id && s.usages.iter().any(|u| u.harness_ledger.is_some())
         }) {
@@ -945,8 +979,27 @@ fn exchange(folder: &Path, catalog: &mut Catalog, origin: &Origin) -> Result<usi
     } else {
         None
     };
+    let harness_v2 = harness_dir
+        .as_ref()
+        .map(|_| directory(&usage, "Harness-v2"))
+        .transpose()?;
+    let harness_v3 = harness_dir
+        .as_ref()
+        .map(|_| directory(&usage, "Harness-v3"))
+        .transpose()?;
+    let mut upgraded = std::collections::BTreeSet::new();
+    if let Some(dir) = &harness_v3 {
+        let (bad, sources) = import_harness(dir, catalog, 6, &upgraded)?;
+        invalid += bad;
+        upgraded.extend(sources);
+    }
+    if let Some(dir) = &harness_v2 {
+        let (bad, sources) = import_harness(dir, catalog, 5, &upgraded)?;
+        invalid += bad;
+        upgraded.extend(sources);
+    }
     if let Some(dir) = &harness_dir {
-        invalid += import_harness(dir, catalog)?;
+        invalid += import_harness(dir, catalog, 4, &upgraded)?.0;
     }
     let (earliest, latest) = sync_days();
     for snapshot in catalog
@@ -1000,19 +1053,53 @@ fn exchange(folder: &Path, catalog: &mut Catalog, origin: &Origin) -> Result<usi
         })
     {
         let mut shared = snapshot.clone();
-        shared.version = 4;
+        shared.version = 6;
         shared.usages.retain(|u| u.harness_ledger.is_some());
         shared.environment = None;
         shared.displays.clear();
         publish_limit(
-            &harness_dir.join(format!("{}.json", origin.id)),
+            &harness_v3
+                .as_ref()
+                .unwrap()
+                .join(format!("{}.json", origin.id)),
             &shared,
             MAX_HARNESS_FILE,
         )?;
+        for u in &mut shared.usages {
+            if let Some(l) = &u.harness_ledger {
+                u.harness_ledger = Some(l.legacy()?);
+            }
+        }
+        shared.version = 5;
+        publish_limit(
+            &harness_v2
+                .as_ref()
+                .unwrap()
+                .join(format!("{}.json", origin.id)),
+            &shared,
+            MAX_HARNESS_FILE,
+        )?;
+        if shared.usages.iter().all(|u| {
+            u.harness_ledger
+                .as_ref()
+                .is_some_and(|l| l.version == 1 && !l.conflict)
+        }) {
+            shared.version = 4;
+            publish_limit(
+                &harness_dir.join(format!("{}.json", origin.id)),
+                &shared,
+                MAX_HARNESS_FILE,
+            )?;
+        }
     }
     Ok(invalid)
 }
-fn import_harness(dir: &Path, catalog: &mut Catalog) -> Result<usize> {
+fn import_harness(
+    dir: &Path,
+    catalog: &mut Catalog,
+    version: u8,
+    skip: &std::collections::BTreeSet<String>,
+) -> Result<(usize, std::collections::BTreeSet<String>)> {
     let (earliest, latest) = sync_days();
     let mut paths = fs::read_dir(dir)?
         .filter_map(Result::ok)
@@ -1020,6 +1107,7 @@ fn import_harness(dir: &Path, catalog: &mut Catalog) -> Result<usize> {
         .collect::<Vec<_>>();
     paths.sort();
     let mut invalid = 0;
+    let mut sources = std::collections::BTreeSet::new();
     let mut budget = MAX_HARNESS_CACHE;
     for path in paths.into_iter().take(32) {
         let Some(raw) = path.file_name().and_then(|n| n.to_str()) else {
@@ -1038,6 +1126,9 @@ fn import_harness(dir: &Path, catalog: &mut Catalog) -> Result<usize> {
         if !name.ends_with(".json") {
             continue;
         }
+        if skip.contains(id) {
+            continue;
+        }
         let path = path.with_file_name(name);
         let size = fs::symlink_metadata(&path).map_or(MAX_HARNESS_FILE, |m| m.len());
         if size > MAX_HARNESS_FILE || size > budget {
@@ -1051,18 +1142,23 @@ fn import_harness(dir: &Path, catalog: &mut Catalog) -> Result<usize> {
         });
         match read {
             Ok(s)
-                if s.version == 4
+                if s.version == version
                     && s.valid()
+                    && (version >= 5
+                        || s.usages
+                            .iter()
+                            .all(|u| !u.harness_ledger.as_ref().is_some_and(|l| l.conflict)))
                     && s.origin.id == id
                     && s.day >= earliest
                     && s.day <= latest =>
             {
+                sources.insert(s.origin.id.clone());
                 catalog.merge(s)
             }
             _ => invalid += 1,
         }
     }
-    Ok(invalid)
+    Ok((invalid, sources))
 }
 /// Reads every day file in one folder (iCloud placeholders download on coordinated read).
 fn import(dir: &Path, catalog: &mut Catalog) -> Result<usize> {
@@ -1160,9 +1256,15 @@ pub enum Command {
 /// its own; a changed fingerprint means another Mac's summary landed on disk and should be read.
 fn fingerprint(folder: &Path) -> Vec<(String, u64, u128)> {
     let mut rows = vec![];
-    for name in [USAGE_DIR, CLIMATE_DIR, "AI用量/Harness"]
-        .into_iter()
-        .chain(LEGACY_DIRS)
+    for name in [
+        USAGE_DIR,
+        CLIMATE_DIR,
+        "AI用量/Harness",
+        "AI用量/Harness-v2",
+        "AI用量/Harness-v3",
+    ]
+    .into_iter()
+    .chain(LEGACY_DIRS)
     {
         let dir = folder.join(name);
         for e in fs::read_dir(&dir)
@@ -1790,6 +1892,185 @@ mod tests {
         assert!(y.snapshots.iter().all(Snapshot::valid));
         assert!(save_cache(&temp, &y));
         assert_eq!(load(&temp).accounts(&[]).len(), 2);
+        fs::remove_dir_all(temp).unwrap();
+    }
+    #[test]
+    fn date_spans_sync_in_versioned_sidecars_and_survive_cache_reload() {
+        let temp = std::env::temp_dir().join(format!(
+            "homecraft-date-spans-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&temp).unwrap();
+        let a = origin("1111111111111111");
+        let day = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        let first =
+            crate::harness::test_reading_on(&a.id, 100, day, day - chrono::Duration::days(1));
+        let second = crate::harness::test_reading_on(&a.id, 100, day, day);
+        let mut c = Catalog::default();
+        c.merge(snap(&a.id, vec![Summary::from_reading(&first).unwrap()]));
+        c.merge(snap(&a.id, vec![Summary::from_reading(&second).unwrap()]));
+        let source = c.harness().remove(0);
+        assert!(source.valid() && source.ledger.as_ref().unwrap().ambiguous());
+        assert!(!source.ledger.as_ref().unwrap().conflict);
+        assert_eq!(exchange(&temp, &mut c, &a).unwrap(), 0);
+        let new_path = temp
+            .join(USAGE_DIR)
+            .join("Harness-v2")
+            .join(format!("{}.json", a.id));
+        let shared: Snapshot = read_json(&new_path, MAX_HARNESS_FILE).unwrap();
+        assert_eq!(shared.version, 5);
+        assert_eq!(shared.usages[0].harness_ledger.as_ref().unwrap().version, 2);
+        assert!(
+            !temp
+                .join(USAGE_DIR)
+                .join("Harness")
+                .join(format!("{}.json", a.id))
+                .exists()
+        );
+        let mut peer = Catalog::default();
+        exchange(&temp, &mut peer, &origin("2222222222222222")).unwrap();
+        assert!(save_cache(&temp, &peer));
+        let reloaded = load(&temp);
+        let r = crate::harness::effective_on(&usage::empty(4, 0, ""), &reloaded.harness(), day);
+        assert_eq!(r.packet.s, usage::OK);
+        assert!(r.packet.d.is_none());
+        assert_eq!(r.packet.wt, Some([20261019, 100]));
+        assert_eq!(r.packet.mt, Some([20261001, 100]));
+        let view = &r.tokens.device_periods[&a.id];
+        assert!(view.d.is_none());
+        assert_eq!(view.mt, r.packet.mt);
+        fs::remove_dir_all(temp).unwrap();
+    }
+    #[test]
+    fn original_usage_time_survives_sidecars_legacy_peers_and_cache_reload() {
+        let temp = std::env::temp_dir().join(format!(
+            "homecraft-original-time-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&temp).unwrap();
+        let a = origin("1111111111111111");
+        let b = origin("2222222222222222");
+        let day = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+        // Keep this exchange fixture inside the live retention window even when
+        // the test runs on a Monday that is also the first day of a month.
+        let start = day
+            .with_day(1)
+            .unwrap()
+            .min(day - chrono::Duration::days(i64::from(day.weekday().num_days_from_monday())));
+        let billed = (day - chrono::Duration::days(1)).max(start);
+        let mut original = crate::harness::test_reading_on(&a.id, 100, day, billed);
+        let ledger = original.tokens.harness_ledger.as_mut().unwrap();
+        ledger.version = 3;
+        let call = &mut std::sync::Arc::make_mut(&mut ledger.calls)[0];
+        call.usage_time = true;
+        call.retain_day = Some(day_id(day));
+        let mut source = Catalog::default();
+        source.merge(snap(&a.id, vec![Summary::from_reading(&original).unwrap()]));
+        assert_eq!(exchange(&temp, &mut source, &a).unwrap(), 0);
+        let sidecar =
+            |folder: &str, id: &str| temp.join(USAGE_DIR).join(folder).join(format!("{id}.json"));
+        let shared: Snapshot = read_json(&sidecar("Harness-v3", &a.id), MAX_HARNESS_FILE).unwrap();
+        assert_eq!(shared.version, 6);
+        assert_eq!(
+            shared.usages[0].harness_ledger,
+            original.tokens.harness_ledger
+        );
+        let legacy: Snapshot = read_json(&sidecar("Harness-v2", &a.id), MAX_HARNESS_FILE).unwrap();
+        assert_eq!(legacy.version, 5);
+        let old_ledger = legacy.usages[0].harness_ledger.as_ref().unwrap();
+        assert!(old_ledger.version <= 2 && old_ledger.valid());
+        assert!(
+            old_ledger
+                .calls
+                .iter()
+                .all(|c| !c.usage_time && c.retain_day.is_none())
+        );
+
+        // A stale lower-format file must not override the upgraded source, and an
+        // older peer can still contribute an envelope-only copy of the same call.
+        let retimed = crate::harness::test_reading_on(&a.id, 100, day, day);
+        let mut stale = snap(&a.id, vec![Summary::from_reading(&retimed).unwrap()]);
+        stale.version = 5;
+        publish_limit(&sidecar("Harness-v2", &a.id), &stale, MAX_HARNESS_FILE).unwrap();
+        let mut peer_reading = crate::harness::test_reading_on(&b.id, 100, day, day);
+        std::sync::Arc::make_mut(&mut peer_reading.tokens.harness_ledger.as_mut().unwrap().calls)
+            [0]
+        .key = original.tokens.harness_ledger.as_ref().unwrap().calls[0]
+            .key
+            .clone();
+        let mut peer = Catalog::default();
+        peer.merge(snap(
+            &b.id,
+            vec![Summary::from_reading(&peer_reading).unwrap()],
+        ));
+        assert_eq!(exchange(&temp, &mut peer, &b).unwrap(), 0);
+        assert!(save_cache(&temp, &peer));
+        let restored = load(&temp);
+        let resolved =
+            crate::harness::effective_on(&usage::empty(4, 0, ""), &restored.harness(), day);
+        assert_eq!(resolved.packet.s, usage::OK);
+        assert_eq!(resolved.packet.d, original.packet.d);
+        assert_eq!(resolved.packet.wt, original.packet.wt);
+        assert_eq!(resolved.packet.mt, original.packet.mt);
+        let restored_source = restored
+            .harness()
+            .into_iter()
+            .find(|d| d.id == a.id)
+            .unwrap();
+        assert!(restored_source.ledger.unwrap().calls[0].usage_time);
+        let published_peer: Snapshot =
+            read_json(&sidecar("Harness-v3", &b.id), MAX_HARNESS_FILE).unwrap();
+        assert!(
+            !published_peer.usages[0]
+                .harness_ledger
+                .as_ref()
+                .unwrap()
+                .calls[0]
+                .usage_time
+        );
+        let compatible: Catalog =
+            read_json(&temp.join(".cloud-cache-v4.json"), MAX_HARNESS_CACHE).unwrap();
+        assert!(compatible.snapshots.iter().all(Snapshot::valid));
+        assert!(compatible.harness().iter().all(|d| {
+            d.ledger.as_ref().is_some_and(|l| {
+                l.version <= 2
+                    && l.calls
+                        .iter()
+                        .all(|c| !c.usage_time && c.retain_day.is_none())
+            })
+        }));
+        fs::remove_dir_all(temp).unwrap();
+    }
+    #[test]
+    fn migration_rebuilds_legacy_conflict_markers_but_new_cache_preserves_real_conflicts() {
+        let temp = std::env::temp_dir().join(format!(
+            "homecraft-conflict-migration-{:016x}",
+            rand::random::<u64>()
+        ));
+        fs::create_dir(&temp).unwrap();
+        let a = origin("1111111111111111");
+        let mut r = crate::harness::test_reading(&a.id, 100);
+        r.tokens.harness_ledger.as_mut().unwrap().conflict = true;
+        let mut c = Catalog::default();
+        c.merge(snap(
+            &a.id,
+            vec![
+                Summary::from_reading(&r).unwrap(),
+                summary(&a.id, "a@example.test", usage::now(), 10),
+            ],
+        ));
+        assert!(save_cache(&temp, &c));
+        assert!(load(&temp).harness()[0].ledger.as_ref().unwrap().conflict);
+        fs::remove_file(temp.join(".cloud-cache-v5.json")).unwrap();
+        fs::remove_file(temp.join(".cloud-cache-v4.json")).unwrap();
+        atomic(
+            &temp.join(".cloud-cache-v3.json"),
+            &serde_json::to_vec(&c).unwrap(),
+        )
+        .unwrap();
+        let migrated = load(&temp);
+        assert!(migrated.harness().is_empty());
+        assert_eq!(migrated.accounts(&[]).len(), 1);
         fs::remove_dir_all(temp).unwrap();
     }
     #[test]

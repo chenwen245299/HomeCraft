@@ -26,7 +26,7 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
             }
         }
     });
-    if r.packet.s != crate::usage::OK || r.tokens.devices.iter().any(|d| d.ledger.is_none()) {
+    if r.packet.s != crate::usage::OK || !r.tokens.note.is_empty() {
         let message = if r.packet.s == crate::usage::OK {
             &r.tokens.note
         } else {
@@ -43,23 +43,27 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
     let selected = scope
         .as_ref()
         .and_then(|id| r.tokens.devices.iter().find(|d| &d.id == id));
+    let selected_packet = scope
+        .as_ref()
+        .and_then(|id| r.tokens.device_periods.get(id));
+    let packet = selected_packet.unwrap_or(&r.packet);
     let day = model::day();
     let week = model::week_start(day);
-    let daily = selected.map_or_else(
-        || r.packet.d.filter(|d| d[0] == day).map(|d| d[1] as u64),
+    let daily = selected.filter(|_| selected_packet.is_none()).map_or_else(
+        || packet.d.filter(|d| d[0] == day).map(|d| d[1] as u64),
         |d| (d.d[0] == day).then_some(d.d[1] as u64),
     );
-    let weekly = selected.map_or(
-        r.packet
+    let weekly = selected.filter(|_| selected_packet.is_none()).map_or(
+        packet
             .wt
             .filter(|w| Some(w[0]) == week)
             .map(|w| w[1] as u64),
         |d| (Some(d.wt[0]) == week).then_some(d.wt[1] as u64),
     );
     let month = model::month_start(day);
-    let monthly = selected.map_or_else(
+    let monthly = selected.filter(|_| selected_packet.is_none()).map_or_else(
         || {
-            r.packet
+            packet
                 .mt
                 .filter(|m| Some(m[0]) == month)
                 .map(|m| m[1] as u64)
@@ -82,8 +86,9 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
     });
     ui.add_space(12.);
     let counters = selected
+        .filter(|_| selected_packet.is_none())
         .map(|d| d.u)
-        .or_else(|| r.packet.u.map(|u| [u[0], u[1], u[2], u[3]]));
+        .or_else(|| packet.u.map(|u| [u[0], u[1], u[2], u[3]]));
     if let Some(u) = counters {
         ui.columns(3, |cols| {
             for (i, label, text) in [
@@ -129,7 +134,7 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
         .unwrap_or(1)
         .max(1);
     for d in devices {
-        device_row(ui, d, day, week, max, t);
+        device_row(ui, d, r.tokens.device_periods.get(&d.id), day, week, max, t);
         ui.add_space(6.);
     }
     if r.tokens.devices.is_empty() {
@@ -139,11 +144,24 @@ pub fn show(ui: &mut egui::Ui, r: &Reading, t: Tokens, scope: &mut Option<String
 fn device_row(
     ui: &mut egui::Ui,
     d: &DeviceUsage,
+    packet: Option<&crate::usage::Packet>,
     day: i64,
     week: Option<i64>,
     max: i64,
     t: Tokens,
 ) {
+    let daily = packet
+        .map_or(Some(d.d), |p| p.d)
+        .filter(|d| d[0] == day)
+        .map(|d| d[1]);
+    let weekly = packet
+        .map_or(Some(d.wt), |p| p.wt)
+        .filter(|w| Some(w[0]) == week)
+        .map(|w| w[1]);
+    let monthly = packet
+        .map_or(d.mt, |p| p.mt)
+        .filter(|m| Some(m[0]) == model::month_start(day))
+        .map(|m| m[1]);
     egui::Frame::new()
         .fill(t.field)
         .corner_radius(theme::CONTROL_RADIUS)
@@ -169,18 +187,15 @@ fn device_row(
                     Layout::top_down(Align::Max),
                     |ui| {
                         ui.label(
-                            RichText::new(model::compact((d.d[0] == day).then_some(d.d[1] as u64)))
+                            RichText::new(model::compact(daily.map(|n| n as u64)))
                                 .font(bold(22.))
                                 .color(t.text),
                         );
                         ui.label(
                             RichText::new(format!(
                                 "本周 {} · 本月 {}",
-                                model::compact((Some(d.wt[0]) == week).then_some(d.wt[1] as u64)),
-                                model::compact(
-                                    d.mt.filter(|m| Some(m[0]) == model::month_start(day))
-                                        .map(|m| m[1] as u64)
-                                )
+                                model::compact(weekly.map(|n| n as u64)),
+                                model::compact(monthly.map(|n| n as u64))
                             ))
                             .size(11.)
                             .color(t.secondary),
@@ -194,8 +209,8 @@ fn device_row(
                 [line.left_center(), line.right_center()],
                 Stroke::new(2., t.line),
             );
-            if d.d[0] == day {
-                let right = line.left() + line.width() * d.d[1] as f32 / max as f32;
+            if let Some(daily) = daily {
+                let right = line.left() + line.width() * (daily as f32 / max as f32).min(1.);
                 ui.painter().line_segment(
                     [line.left_center(), egui::pos2(right, line.center().y)],
                     Stroke::new(3., t.accent),

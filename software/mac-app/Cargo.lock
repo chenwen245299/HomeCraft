@@ -932,7 +932,7 @@ checksum = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13"
 
 [[package]]
 name = "epaper-ble"
-version = "0.3.4"
+version = "0.3.6"
 dependencies = [
  "aes-gcm",
  "anyhow",

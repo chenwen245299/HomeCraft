@@ -8,7 +8,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::Read,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::SystemTime,
@@ -89,6 +89,7 @@ impl DeviceUsage {
                 ledger.valid()
                     && ledger.day == self.d[0]
                     && (ledger.conflict
+                        || ledger.ambiguous()
                         || ledger.days().is_ok_and(|days| {
                             reading(&days, ledger::date(ledger.day).unwrap(), origin.clone())
                                 .is_ok_and(|r| {
@@ -118,6 +119,18 @@ impl DeviceUsage {
     }
 }
 pub fn effective(local: &Reading, devices: &[DeviceUsage]) -> Reading {
+    let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+    effective_on(local, devices, today)
+}
+pub(crate) fn effective_on(local: &Reading, devices: &[DeviceUsage], today: NaiveDate) -> Reading {
+    effective_inner(local, devices, today, true)
+}
+fn effective_inner(
+    local: &Reading,
+    devices: &[DeviceUsage],
+    today: NaiveDate,
+    device_views: bool,
+) -> Reading {
     if local.packet.p != PROVIDER {
         return local.clone();
     }
@@ -131,49 +144,66 @@ pub fn effective(local: &Reading, devices: &[DeviceUsage]) -> Reading {
     if devices.is_empty() {
         return local.clone();
     }
-    let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
     let ledgers = devices
         .iter()
         .filter_map(|d| d.ledger.as_ref())
         .collect::<Vec<_>>();
     let mut r = if ledgers.is_empty() {
-        let mut r = usage::empty(PROVIDER, 1, "旧版总数缺少调用明细，等待新版同步");
+        let mut r = usage::empty(PROVIDER, 1, "当前只有旧版总数，缺少可去重的调用明细");
         r.packet.n = Some(NAME.into());
         r
     } else {
-        match Ledger::union(today, ledgers.iter().copied()).and_then(|ledger| {
-            let days = ledger.days()?;
+        match Ledger::periods(today, ledgers.iter().copied()).and_then(|periods| {
             let origin = local.packet.o.clone().unwrap_or_else(|| Origin {
                 id: devices[0].id.clone(),
                 name: devices[0].name.clone(),
             });
-            let mut r = reading(&days, today, origin)?;
-            // Only a current observation can establish a real zero for today.
-            if !ledgers.iter().any(|l| l.day == day_id(today)) && !days.contains_key(&today) {
-                r.packet.d = None;
-                r.packet.u = None;
-                r.tokens.recent_day = None;
-                r.tokens.input = None;
-                r.tokens.output = None;
-                r.tokens.cached = None;
-                r.tokens.calls = None;
-            }
+            let mut r = reading(&BTreeMap::new(), today, origin)?;
             let monday =
                 today - chrono::Duration::days(i64::from(today.weekday().num_days_from_monday()));
-            if !ledgers
-                .iter()
-                .any(|l| ledger::date(l.day).is_some_and(|d| d >= monday))
-            {
-                r.packet.wt = None;
-                r.tokens.weekly = None;
+            let [daily, weekly, monthly] = periods.values;
+            r.packet.d = daily.map(|d| [day_id(today), d.total() as i64]);
+            r.packet.wt = weekly.map(|d| [day_id(monday), d.total() as i64]);
+            r.packet.mt = monthly.map(|d| [day_id(today.with_day(1).unwrap()), d.total() as i64]);
+            r.packet.u = daily.map(|d| {
+                [
+                    d.input as i64,
+                    d.output as i64,
+                    d.cached as i64,
+                    d.calls as i64,
+                    d.calls as i64,
+                ]
+            });
+            r.tokens.recent_day = daily.map(Day::total);
+            r.tokens.weekly = weekly.map(Day::total);
+            r.tokens.monthly = monthly.map(Day::total);
+            r.tokens.input = daily.map(|d| d.input);
+            r.tokens.output = daily.map(|d| d.output);
+            r.tokens.cached = daily.map(|d| d.cached);
+            r.tokens.calls = daily.map(|d| d.calls);
+            let affected = ["今日", "本周", "本月"]
+                .into_iter()
+                .zip(periods.disputed)
+                .filter_map(|(label, disputed)| disputed.then_some(label))
+                .collect::<Vec<_>>();
+            r.tokens.note = if affected.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "{}调用记录有分歧，数值待核对{}",
+                    affected.join("、"),
+                    if affected.len() < 3 {
+                        "；其他周期照常显示"
+                    } else {
+                        ""
+                    }
+                )
+            };
+            if periods.disputed.iter().any(|d| *d) && periods.values.iter().all(Option::is_none) {
+                r.packet.s = 6;
+                r.source = r.tokens.note.clone();
             }
-            if !ledgers
-                .iter()
-                .any(|l| ledger::date(l.day).is_some_and(|d| d >= today.with_day(1).unwrap()))
-            {
-                r.packet.mt = None;
-                r.tokens.monthly = None;
-            }
+            r.packet.encode()?;
             Ok(r)
         }) {
             Ok(r) => r,
@@ -184,12 +214,35 @@ pub fn effective(local: &Reading, devices: &[DeviceUsage]) -> Reading {
             }
         }
     };
-    let legacy = devices.iter().filter(|d| d.ledger.is_none()).count();
-    r.tokens.note = if legacy > 0 {
-        format!("调用去重 · {legacy} 台旧版来源待同步明细 · UTC+8")
-    } else {
-        format!("{} 台 Mac 观测 · 调用去重 · UTC+8", devices.len())
-    };
+    let legacy = devices
+        .iter()
+        .filter(|d| d.ledger.is_none() && d.d[0] >= day_id(today.with_day(1).unwrap()))
+        .count();
+    let note = std::mem::take(&mut r.tokens.note);
+    r.tokens.note = format!("{} 台 Mac 观测 · 调用去重 · UTC+8", ledgers.len());
+    if legacy > 0 {
+        r.tokens
+            .note
+            .push_str(&format!("；{legacy} 台仅有旧版总数，未计入"));
+    }
+    if !note.is_empty() {
+        r.tokens.note.push_str(&format!("；{note}"));
+    }
+    if device_views {
+        for device in &devices {
+            if device.ledger.is_none() {
+                if let Ok(packet) = device.packet() {
+                    r.tokens.device_periods.insert(device.id.clone(), packet);
+                }
+                continue;
+            }
+            let empty = usage::empty(PROVIDER, 0, "");
+            let view = effective_inner(&empty, std::slice::from_ref(device), today, false);
+            r.tokens
+                .device_periods
+                .insert(device.id.clone(), view.packet);
+        }
+    }
     r.tokens.devices = devices;
     r
 }
@@ -274,14 +327,36 @@ pub fn display_packets(reading: &Reading, per_mac: bool) -> Result<Vec<usage::Pa
     Ok(vec![packet])
 }
 pub fn load_devices(root: &Path) -> Vec<DeviceUsage> {
-    let devices: Vec<DeviceUsage> =
-        crate::config::read_private(&root.join(".harness-devices-v2.json"))
-            .or_else(|_| crate::config::read_private(&root.join(".harness-devices.json")))
-            .unwrap_or_default();
+    let current = crate::config::read_private_bounded::<Vec<DeviceUsage>>(
+        &root.join(".harness-devices-v4.json"),
+        192 * 1024 * 1024,
+    )
+    .or_else(|_| {
+        crate::config::read_private_bounded(
+            &root.join(".harness-devices-v3.json"),
+            192 * 1024 * 1024,
+        )
+    });
+    let migrating = current.is_err();
+    let devices = current
+        .or_else(|_| {
+            crate::config::read_private_bounded(
+                &root.join(".harness-devices-v2.json"),
+                192 * 1024 * 1024,
+            )
+        })
+        .or_else(|_| crate::config::read_private(&root.join(".harness-devices.json")))
+        .unwrap_or_default();
     if devices.len() > 8 || devices.iter().any(|d| !d.valid()) {
         return Vec::new();
     }
-    merge_devices(&[], &devices)
+    merge_devices(
+        &[],
+        &devices
+            .into_iter()
+            .filter(|d| !migrating || !d.ledger.as_ref().is_some_and(|l| l.conflict))
+            .collect::<Vec<_>>(),
+    )
 }
 pub fn save_devices(root: &Path, devices: &[DeviceUsage]) -> Result<()> {
     use std::io::Write;
@@ -299,9 +374,11 @@ pub fn save_devices(root: &Path, devices: &[DeviceUsage]) -> Result<()> {
             .write(true)
             .mode(0o600)
             .open(&tmp)?;
-        file.write_all(&serde_json::to_vec(devices)?)?;
+        let bytes = serde_json::to_vec(devices)?;
+        ensure!(bytes.len() <= 192 * 1024 * 1024, "Harness 设备缓存过长");
+        file.write_all(&bytes)?;
         file.sync_all()?;
-        fs::rename(&tmp, root.join(".harness-devices-v2.json"))?;
+        fs::rename(&tmp, root.join(".harness-devices-v4.json"))?;
         Ok(())
     })();
     if result.is_err() {
@@ -405,7 +482,7 @@ impl Origin {
     }
 }
 
-#[derive(Clone, Copy, Default, Deserialize)]
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct Counters {
     input_tokens: u64,
@@ -448,6 +525,7 @@ struct Chunk {
 struct Stream {
     #[serde(rename = "type")]
     kind: String,
+    time: Option<i64>,
     chunk: Option<Chunk>,
 }
 #[derive(Default, Deserialize)]
@@ -577,8 +655,20 @@ impl Fold {
                 .and_then(|c| c.usage)
         });
         let Some(sample) = sample else { return Ok(()) };
-        let millis = row
-            .time
+        let original_time = row
+            .data
+            .stream
+            .iter()
+            .rev()
+            .find(|r| {
+                r.kind == "chunk"
+                    && r.chunk
+                        .as_ref()
+                        .is_some_and(|c| c.kind == "usage" && c.usage == Some(sample))
+            })
+            .and_then(|r| r.time);
+        let millis = original_time
+            .or(row.time)
             .ok_or_else(|| anyhow::anyhow!("Harness 用量缺少时间"))?;
         let date = chrono::DateTime::from_timestamp_millis(millis)
             .and_then(|t| t.checked_add_signed(chrono::Duration::hours(8)))
@@ -618,6 +708,17 @@ impl Fold {
         self.result.calls.insert(
             identity.clone(),
             Call {
+                through: None,
+                usage_time: original_time.is_some(),
+                retain_day: if original_time.is_some() {
+                    row.time
+                        .and_then(chrono::DateTime::from_timestamp_millis)
+                        .map(|t| (t + chrono::Duration::hours(8)).date_naive())
+                        .filter(|d| *d != date)
+                        .map(day_id)
+                } else {
+                    None
+                },
                 key: identity,
                 at: millis,
                 revision,
@@ -743,9 +844,20 @@ fn generation(name: &str) -> Option<(u32, bool)> {
 struct Cached {
     len: u64,
     modified: SystemTime,
+    inode: u64,
+    device: u64,
+    changed: (i64, i64),
     session: Session,
 }
 fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>, today: NaiveDate) -> Result<Ledger> {
+    scan_with_references(root, cache, today, &HashSet::new())
+}
+fn scan_with_references(
+    root: &Path,
+    cache: &mut HashMap<PathBuf, Cached>,
+    today: NaiveDate,
+    referenced: &HashSet<String>,
+) -> Result<Ledger> {
     let mut found = HashSet::new();
     let mut calls = Vec::new();
     let mut count = 0;
@@ -792,10 +904,13 @@ fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>, today: NaiveDate) -> 
             let meta = file.metadata()?;
             ensure!(meta.len() <= MAX_FILE, "Harness 单个日志过大");
             let modified = meta.modified()?;
-            let session = if let Some(saved) = cache
-                .get(&path)
-                .filter(|c| c.len == meta.len() && c.modified == modified)
-            {
+            let session = if let Some(saved) = cache.get(&path).filter(|c| {
+                c.len == meta.len()
+                    && c.modified == modified
+                    && c.inode == meta.ino()
+                    && c.device == meta.dev()
+                    && c.changed == (meta.ctime(), meta.ctime_nsec())
+            }) {
                 saved.session.clone()
             } else {
                 let mut bytes = Vec::new();
@@ -807,13 +922,24 @@ fn scan(root: &Path, cache: &mut HashMap<PathBuf, Cached>, today: NaiveDate) -> 
                     Cached {
                         len: meta.len(),
                         modified,
+                        inode: meta.ino(),
+                        device: meta.dev(),
+                        changed: (meta.ctime(), meta.ctime_nsec()),
                         session: session.clone(),
                     },
                 );
                 session
             };
             found.insert(path);
-            calls.extend(session.calls.into_values());
+            calls.extend(session.calls.into_values().map(|mut call| {
+                if call.usage_time
+                    && referenced.contains(&call.key)
+                    && call.date().is_some_and(|d| d < ledger::first(today))
+                {
+                    call.retain_day = Some(day_id(today));
+                }
+                call
+            }));
         }
     }
     cache.retain(|p, _| found.contains(p));
@@ -880,7 +1006,26 @@ pub async fn collect(root: &Path) -> Reading {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Harness 缓存不可用"))?;
             let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
-            let ledger = scan(&sessions, &mut cache, today)?;
+            // Old clients can publish an import date in the current period for an
+            // original call from a previous month. Keep only the referenced original
+            // evidence needed to correct those keys; these are still local observations.
+            let referenced = load_devices(&root)
+                .into_iter()
+                .chain(crate::cloud::cached_harness(&root))
+                .filter_map(|d| d.ledger)
+                .flat_map(|l| {
+                    l.calls
+                        .iter()
+                        .filter(|c| !c.usage_time)
+                        .map(|c| c.key.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<HashSet<_>>();
+            let ledger = if referenced.is_empty() {
+                scan(&sessions, &mut cache, today)?
+            } else {
+                scan_with_references(&sessions, &mut cache, today, &referenced)?
+            };
             let mut result = reading(&ledger.days()?, today, origin)?;
             result.tokens.harness_ledger = Some(ledger);
             Ok(result)
@@ -902,9 +1047,16 @@ pub async fn collect(root: &Path) -> Reading {
 #[cfg(test)]
 pub(crate) fn test_reading(id: &str, n: u64) -> Reading {
     let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+    test_reading_on(id, n, today, today)
+}
+#[cfg(test)]
+pub(crate) fn test_reading_on(id: &str, n: u64, today: NaiveDate, billed: NaiveDate) -> Reading {
     let call = Call {
+        through: None,
+        usage_time: false,
+        retain_day: None,
         key: Call::key(id, 1, 1, 0),
-        at: today
+        at: billed
             .and_hms_opt(4, 0, 0)
             .unwrap()
             .and_utc()
@@ -936,6 +1088,119 @@ mod tests {
     }
     fn header(seeded: bool) -> Value {
         json!({"type":"session","version":4,"id":"synthetic-session","isSeeded":seeded})
+    }
+    fn live_sync_fixture() -> Vec<Value> {
+        // Produced by the installed iCloud plugin's real appendOpen adapter, with a
+        // synthetic Session implementing the SDK's Date.now() envelope stamping.
+        serde_json::from_str(include_str!("../tests/harness-live-sync.json")).unwrap()
+    }
+    #[test]
+    fn live_icloud_handoff_uses_original_usage_time_across_month_and_week_boundary() {
+        let rows = live_sync_fixture();
+        let session = parse(&encode(&rows), false).unwrap();
+        let call = session.calls.into_values().next().unwrap();
+        assert_eq!(call.at, 1780243198000); // May 31 UTC+8, not the June 1 live append.
+        assert!(call.usage_time);
+        assert_eq!(call.retain_day, Some(20260601));
+        let today = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let mut old = call.clone();
+        old.at = rows[1]["time"].as_i64().unwrap();
+        old.usage_time = false;
+        old.retain_day = None;
+        let original = Ledger::new(today, [call]).unwrap();
+        let legacy = Ledger::new(today, [old.clone()]).unwrap();
+        let merged = original.merge(&legacy);
+        assert!(!merged.conflict && !merged.ambiguous());
+        assert_eq!(merged.version, 3);
+        assert_eq!(merged, legacy.merge(&original));
+        let restarted: Ledger =
+            serde_json::from_slice(&serde_json::to_vec(&merged).unwrap()).unwrap();
+        assert_eq!(
+            Ledger::periods(today, [&restarted, &legacy])
+                .unwrap()
+                .values
+                .map(|v| v.map(Day::total)),
+            [Some(0); 3]
+        );
+        // Time authority must never choose between conflicting counters.
+        old.tokens[0] += 1;
+        let conflicting = Ledger::new(today, [old]).unwrap();
+        assert!(
+            Ledger::periods(today, [&original, &conflicting])
+                .unwrap()
+                .values
+                .iter()
+                .all(Option::is_none)
+        );
+    }
+    #[test]
+    fn usage_time_requires_matching_counters_and_valid_original_timestamp() {
+        let mut rows = live_sync_fixture();
+        rows[1]["data"]["usage"]["inputTokens"] = json!(200);
+        let session = parse(&encode(&rows), false).unwrap();
+        let call = session.calls.into_values().next().unwrap();
+        assert!(!call.usage_time);
+        assert_eq!(call.at, rows[1]["time"].as_i64().unwrap());
+        let mut rows = live_sync_fixture();
+        rows[1]["data"]["stream"][0]["time"] = json!(-1);
+        assert!(parse(&encode(&rows), false).is_err());
+    }
+    #[test]
+    fn original_time_evidence_is_retained_for_legacy_peers_current_period_keys() {
+        let root =
+            std::env::temp_dir().join(format!("harness-canonical-{:016x}", rand::random::<u64>()));
+        fs::create_dir_all(root.join("p/s")).unwrap();
+        let mut rows = live_sync_fixture();
+        rows[1]["time"] = rows[1]["data"]["stream"][0]["time"].clone();
+        fs::write(root.join("p/s/session.v4.jsonl"), encode(&rows)).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 6, 1).unwrap();
+        let mut cache = HashMap::new();
+        assert!(scan(&root, &mut cache, today).unwrap().calls.is_empty());
+        let key = Call::key("synthetic-icloud-handoff", 1, 1, 0);
+        let ledger = scan_with_references(&root, &mut cache, today, &HashSet::from([key])).unwrap();
+        assert_eq!(ledger.calls.len(), 1);
+        assert_eq!(ledger.calls[0].retain_day, Some(20260601));
+        assert_eq!(
+            Ledger::periods(today, [&ledger])
+                .unwrap()
+                .values
+                .map(|v| v.map(Day::total)),
+            [Some(0); 3]
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn atomic_log_replacement_invalidates_cache_even_with_preserved_length_and_mtime() {
+        let root =
+            std::env::temp_dir().join(format!("harness-replaced-{:016x}", rand::random::<u64>()));
+        fs::create_dir_all(root.join("p/s")).unwrap();
+        let path = root.join("p/s/session.v4.jsonl");
+        fs::write(&path, encode(&[header(false), message(0, 100)])).unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+        let mut cache = HashMap::new();
+        assert_eq!(
+            scan(&root, &mut cache, date()).unwrap().days().unwrap()[&date()].total(),
+            165
+        );
+        let temp = path.with_extension("tmp");
+        fs::write(&temp, encode(&[header(false), message(0, 200)])).unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&temp)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(metadata.modified().unwrap()))
+            .unwrap();
+        fs::rename(temp, &path).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), metadata.len());
+        assert_eq!(
+            fs::metadata(&path).unwrap().modified().unwrap(),
+            metadata.modified().unwrap()
+        );
+        assert_eq!(
+            scan(&root, &mut cache, date()).unwrap().days().unwrap()[&date()].total(),
+            265
+        );
+        fs::remove_dir_all(root).unwrap();
     }
     fn event(seq: u64, kind: &str, data: Value) -> Value {
         json!({"type":kind,"seq":seq,"time":1792540800000i64,"data":data})
@@ -1042,7 +1307,7 @@ mod tests {
         let d = DeviceUsage::from_reading(&r).unwrap();
         save_devices(&root, std::slice::from_ref(&d)).unwrap();
         assert_eq!(
-            fs::metadata(root.join(".harness-devices-v2.json"))
+            fs::metadata(root.join(".harness-devices-v4.json"))
                 .unwrap()
                 .permissions()
                 .mode()
@@ -1209,6 +1474,84 @@ mod tests {
         assert_eq!(clear.s, 0);
         assert!(clear.o.is_none() && clear.d.is_none() && clear.u.is_none());
         assert_eq!(r.packet.s, 6); // The App still explains the original conflict.
+    }
+    #[test]
+    fn cross_day_copies_preserve_week_and_month_through_cache_and_display() {
+        let snapshot = |id: &str, billed: NaiveDate| {
+            let origin = Origin {
+                id: id.into(),
+                name: "Test Mac".into(),
+            };
+            let ledger = Ledger::new(
+                date(),
+                [Call {
+                    through: None,
+                    usage_time: false,
+                    retain_day: None,
+                    key: Call::key("shared-session", 1, 1, 0),
+                    at: billed
+                        .and_hms_opt(4, 0, 0)
+                        .unwrap()
+                        .and_utc()
+                        .timestamp_millis(),
+                    revision: 1,
+                    settled: true,
+                    tokens: [100, 10, 5],
+                }],
+            )
+            .unwrap();
+            let mut r = reading(&ledger.days().unwrap(), date(), origin).unwrap();
+            r.tokens.harness_ledger = Some(ledger);
+            r
+        };
+        let local = snapshot("1111111111111111", date());
+        let peer = snapshot("2222222222222222", date() - chrono::Duration::days(1));
+        let devices = vec![DeviceUsage::from_reading(&peer).unwrap()];
+        let restored: Vec<DeviceUsage> =
+            serde_json::from_slice(&serde_json::to_vec(&devices).unwrap()).unwrap();
+        for devices in [devices, restored] {
+            let result = effective_on(&local, &devices, date());
+            assert_eq!(result.packet.s, usage::OK);
+            assert!(result.packet.d.is_none() && result.packet.u.is_none());
+            assert_eq!(result.packet.wt, Some([20261019, 110]));
+            assert_eq!(result.packet.mt, Some([20261001, 110]));
+            assert!(result.tokens.note.contains("今日调用记录有分歧"));
+            let packet = display_packets(&result, false).unwrap().remove(0);
+            assert_eq!(packet.s, usage::OK);
+            assert_eq!(packet.d.unwrap()[1], -1);
+            assert!(packet.o.is_none());
+            assert_eq!(packet.mt, Some([20261001, 110]));
+            let repeated = effective_on(&result, &devices, date());
+            assert_eq!(repeated.packet.mt, result.packet.mt);
+        }
+    }
+    #[test]
+    fn large_call_caches_reload_without_relaxing_private_configuration_limits() {
+        let today = (chrono::Utc::now() + chrono::Duration::hours(8)).date_naive();
+        let mut base = test_reading("1111111111111111", 100);
+        let original = base.tokens.harness_ledger.as_ref().unwrap().calls[0].clone();
+        let ledger = Ledger::new(
+            today,
+            (0..2048).map(|i| Call {
+                key: Call::key("large", i, 1, 0),
+                ..original.clone()
+            }),
+        )
+        .unwrap();
+        base = reading(&ledger.days().unwrap(), today, base.packet.o.unwrap()).unwrap();
+        base.tokens.harness_ledger = Some(ledger);
+        let device = DeviceUsage::from_reading(&base).unwrap();
+        let root =
+            std::env::temp_dir().join(format!("harness-large-{:016x}", rand::random::<u64>()));
+        fs::create_dir(&root).unwrap();
+        save_devices(&root, std::slice::from_ref(&device)).unwrap();
+        let path = root.join(".harness-devices-v4.json");
+        assert!(fs::metadata(&path).unwrap().len() > 32_768);
+        assert!(crate::config::read_private::<Vec<DeviceUsage>>(&path).is_err());
+        assert_eq!(load_devices(&root), vec![device.clone()]);
+        fs::rename(&path, root.join(".harness-devices-v2.json")).unwrap();
+        assert_eq!(load_devices(&root), vec![device]);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn origin_extension_requires_explicit_capability_and_stays_under_gatt_limit() {

@@ -86,6 +86,58 @@ fn setup() -> (egui::Context, Home, State) {
     (ctx, home, state)
 }
 #[test]
+fn usage_page_settles_without_alternating_layouts() {
+    for size in [[850., 620.], [1100., 780.], [1440., 900.]] {
+        let (ctx, mut home, mut state) = setup();
+        home.activate("usage.harness");
+        let local = crate::harness::test_reading("1111111111111111", 500);
+        let peer = crate::harness::test_reading("2222222222222222", 700);
+        state.readings.push(local);
+        state.harness_devices = vec![crate::harness::DeviceUsage::from_reading(&peer).unwrap()];
+        state = crate::cloud::presentation(state);
+        let mut layouts = vec![];
+        for index in 0..16 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(size[0], size[1]),
+                    )),
+                    time: Some(index as f64 * 0.25),
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show(ui, |ui| {
+                            home.render(ui, &state);
+                        });
+                },
+            );
+            layouts.push(format!("{:?}", output.shapes));
+            output.platform_output.commands.clear();
+            output.textures_delta.clear();
+        }
+        if let Some(pair) = layouts[8..].windows(2).find(|w| w[0] != w[1]) {
+            let at = pair[0]
+                .chars()
+                .zip(pair[1].chars())
+                .position(|(a, b)| a != b)
+                .unwrap_or(0);
+            let detail = pair
+                .iter()
+                .map(|s| {
+                    s.chars()
+                        .skip(at.saturating_sub(180))
+                        .take(500)
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>();
+            panic!("usage layout keeps changing at {size:?}: {detail:?}");
+        }
+    }
+}
+#[test]
 fn environment_location_filter_range_and_explicit_name_editor_work() {
     for size in [[850., 620.], [1100., 780.], [1440., 900.]] {
         let (ctx, mut home, mut state) = setup();

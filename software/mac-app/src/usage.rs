@@ -228,6 +228,8 @@ pub struct TokenStats {
     pub account: Option<crate::account::Identity>,
     #[serde(default)]
     pub devices: Vec<crate::harness::DeviceUsage>,
+    #[serde(skip)]
+    pub device_periods: std::collections::BTreeMap<String, Packet>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_ledger: Option<crate::harness::Ledger>,
     #[serde(default)]
